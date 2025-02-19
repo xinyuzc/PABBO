@@ -6,7 +6,9 @@ from tqdm import tqdm
 import random
 from policies.transformer import TransformerModel
 from policies.policy import *
-from data.data import *
+from data.utils import *
+from data.sampler import *
+from data.environment import get_user_preference
 
 
 def tnp(data):
@@ -31,9 +33,10 @@ def evaluate(
     NUM_QUERY_POINTS=256,
     T=30,
 ):
+    print("[Ablation on the pre-training synthetic data composition]")
     torch.set_default_dtype(torch.float32)
     torch.set_default_device(device)
-    print("Loading initialization")
+    print("Loading initialization...")
     initializations = torch.load("datasets/GP2D_initial_pairs.pt")
     NUM_SEEDS = len(initializations)
     B = len(initializations["0"]["context_c"])

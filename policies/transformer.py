@@ -213,6 +213,7 @@ class TransformerModel(TransformerBase):
         bound_std: bool = False,
         nbuckets: int = 2,
         y_range: float = 3.0,
+        time_budget: bool = True,
     ):
         """Preferential amortized black-box optimization (PABBO).
 
@@ -230,6 +231,7 @@ class TransformerModel(TransformerBase):
             bound_std, bool: whether to bound the standard deviation range of the Gaussian prediction head. Default as False.
             nbuckets, scalar: prediction head output dimension. Default as 2 and a Gaussian prediction head is used.
             y_range, float: to obtain predicted function values' range,(-y_range, y_range), when setting up Riemann distribution (dummy).
+            time_budget, bool: whether to pass t / T to the acquisition head.
         """
         super().__init__(
             d_x=d_x,
@@ -250,6 +252,7 @@ class TransformerModel(TransformerBase):
         self.use_value_network = use_value_network
         self.nbuckets = nbuckets
         self.y_range = y_range
+        self.time_budget = time_budget
 
         if self.nbuckets > 2:
             raise ValueError("Remove for simplicity.")
@@ -260,10 +263,12 @@ class TransformerModel(TransformerBase):
             nn.Linear(self.dim_feedforward, self.nbuckets),
         )  # prediction head
 
+        # acquisition head
         if self.af_name == "mlp":
-            self.af_mlp = build_mlp(
-                2 * self.d_model + 1, dim_feedforward, 1, 3
-            )  # acquisition head
+            if time_budget:
+                self.af_mlp = build_mlp(2 * self.d_model + 1, dim_feedforward, 1, 3)
+            else:
+                self.af_mlp = build_mlp(2 * self.d_model, dim_feedforward, 1, 3)
 
     def forward(
         self,
@@ -323,9 +328,10 @@ class TransformerModel(TransformerBase):
             if (
                 self.af_name == "mlp"
             ):  # state: [concatenated Trasformer_outputs of the pair, t/T]
-                state_ix_af = state_ix[:, None, :].tile(1, len(acquire_comb_idx), 1)
                 mlp_in = z_eval.flatten(start_dim=-2)
-                mlp_in = torch.cat([mlp_in, state_ix_af], dim=-1)
+                if self.time_budget:  # pass t/T to the acquisition head
+                    state_ix_af = state_ix[:, None, :].tile(1, len(acquire_comb_idx), 1)
+                    mlp_in = torch.cat([mlp_in, state_ix_af], dim=-1)
 
                 if not self.joint_model_af_training:
                     mlp_in = mlp_in.detach()

@@ -1,0 +1,9 @@
+defaults:
+  - datasets@data: GP1D
+  - _train
+  - _self_
+
+train: 
+  num_query_points: 100
+  num_prediction_points: 100
+  n_random_pairs: 100

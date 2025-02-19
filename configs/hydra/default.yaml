@@ -1,0 +1,13 @@
+run:
+  # output directory for normal runs 
+  dir: ./outputs/${now:%Y%m%d_%H%M%S}
+sweep:
+  # output directory for sweep runs
+  dir: ./outputs/${now:%Y%m%d_%H%M%S}
+  subdir: ${hydra.job.num}_${hydra.job.id}
+job: 
+  chdir: true # automatically change to the working directory
+# tell hydra to put the logger for our code to DEBUG
+verbose: [__main__] 
+
+  

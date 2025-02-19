@@ -1,0 +1,5 @@
+name: GP1D
+d_x: 1 
+x_range: [[-1, 1]]
+min_num_ctx: 1
+max_num_ctx: 50
