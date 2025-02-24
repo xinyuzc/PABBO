@@ -57,7 +57,6 @@ def train(config: DictConfig, model: TransformerModel):
 
     # sampler for GP curves with a global maximum
     sampler = OptimizationSampler(
-        d_x=config.data.d_x,
         device=config.experiment.device,
         **config.train.sampler,
     )
@@ -100,6 +99,7 @@ def train(config: DictConfig, model: TransformerModel):
     # dataset configuration
     # NOTE scale the scale with input dimension in config files
     B = config.train.train_batch_size
+    d_x = len(config.data.x_range)  # NOTE
     max_num_ctx = config.data.max_num_ctx
     num_query_points = config.train.num_query_points  # size of query set
     num_prediction_points = config.train.num_prediction_points
@@ -206,7 +206,7 @@ def train(config: DictConfig, model: TransformerModel):
                 query_src=src_pairs[:, ctx_idx],
                 c_src=src_c[:, ctx_idx],
                 eval_pos=src_pairs[:, tar_idx].view(
-                    len(src_pairs), -1, config.data.d_x
+                    len(src_pairs), -1, d_x
                 ),  # flatten the target pairs into locations
                 acquire=False,
             )[1]

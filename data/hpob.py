@@ -52,7 +52,7 @@ class HPOBHandler:
         Args:
             root_dir, str: where HPO-B benchmark data files are stored.
             only_test, bool: whether to load only test data.
-            augmented_train, bool: whether to load the augmented train data. dummy.
+            augmented_train, bool: whether to load the augmented train data.
 
         Attrs:
             meta_train_data:

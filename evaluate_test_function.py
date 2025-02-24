@@ -3,6 +3,7 @@ from wandb_wrapper import init as wandb_init
 from omegaconf import DictConfig
 import torch
 import numpy as np
+import pandas as pd
 import os.path as osp
 import os
 import hydra
@@ -12,7 +13,7 @@ from utils.paths import DATASETS_PATH, RESULT_PATH
 from typing import Dict
 from policies.transformer import TransformerModel
 from data.utils import set_all_seeds
-from data.sampler import SimpleGPSampler, OptimizationFunction, UtilitySampler
+from data.sampler import UtilitySampler
 from data.kernel import *
 from data.utils import scale_from_domain_1_to_domain_2
 from data.environment import generate_query_pair_set
@@ -110,8 +111,7 @@ def evaluate_a_dataset(
     seed: int,
     Xopt: torch.Tensor,
     yopt: torch.Tensor,
-    sampler_kwargs: Dict,
-    function_kwargs: Dict,
+    utility: Callable,
     test_x_range: torch.Tensor,
     train_x_range: torch.Tensor,
     initial_pairs: torch.Tensor,
@@ -131,8 +131,7 @@ def evaluate_a_dataset(
         seed, scalar: random seed.
         Xopt, (num_global_optima, d_x): global optimum.
         yopt, (num_global_optima, 1): the optimal utility value.
-        sampler_kwargs, Dict{"kernel_function": str, "mean": torch.Tensor, "jitter": float}: arguments for recovering the GP sampler.
-        function_kwargs, Dict: arguments for recovering the utility with a global optimum from the GP.
+        utility: test function that provides utility value of shape (B, N, 1) at any input of shape (B, N, d_x)
         test_x_range, (d_x, 2): the input range of the test function.
         train_x_range, (d_x, 2): the input range where PABBO was trained. We should scale all test inputs to the train_x_range.
         initial_pairs, (num_initial_pairs, 2 * d_x): the initial pairs.
@@ -176,15 +175,7 @@ def evaluate_a_dataset(
         bound2=train_x_range,
     ).view(-1, 2 * d_x)[None, :, :]
 
-    # Build utility function for GP samples: we first create GP sampler with saved kernel function and mean
-    sampler = SimpleGPSampler(
-        kernel_function=globals()[sampler_kwargs["kernel_function"]],
-        mean=sampler_kwargs["mean"],
-        jitter=sampler_kwargs["jitter"],
-    )
-    # then wrap it with `OptimizationFunction` class into the utility function
-    utility = OptimizationFunction(sampler=sampler, **function_kwargs)
-    # a sampler for the utility function
+    # sampler for the utility function
     sampler = UtilitySampler(
         d_x=d_x,
         utility_function=utility,
@@ -393,7 +384,7 @@ def evaluate_a_dataset(
 def evaluate(
     config: DictConfig,
 ) -> Dict:
-    """Evaluate PABBO with GP samples.
+    """Evaluate PABBO with synthetic test functions.
     Args:
         config: the configuration.
 
@@ -429,19 +420,17 @@ def evaluate(
     )
     if not osp.exists(datapath):
         print(f"Generating PBBO evaluation task for {config.data.name}...")
-        eval_task = generate_gp_evaluation_task(
+        eval_task = generate_test_function_evaluation_task(
+            dataname=config.data.name,
             num_seeds=config.eval.num_seeds,
-            num_datasets=config.eval.num_datasets,
             test_x_range=config.data.x_range,
             train_x_range=[
                 config.train.x_i_range for _ in range(len(config.data.x_range))
             ],
-            max_num_ctx_points=config.data.max_num_ctx,
-            num_total_points=config.eval.num_total_points,
+            Xopt=torch.tensor(config.data.Xopt),
+            yopt=torch.tensor(config.data.yopt),
             num_initial_pairs=config.eval.num_initial_pairs,
-            **config.eval.sampler,
             p_noise=config.eval.p_noise,
-            device=config.experiment.device,
         )
         torch.save(eval_task, datapath)
         print(
@@ -464,8 +453,6 @@ def evaluate(
     TRAIN_X_RANGE = torch.tensor(eval_task["train_x_range"]).to(
         dtype=torch.float32, device=config.experiment.device
     )  # (d_x, 2)
-    SAMPLER_KWARGS = eval_task["sampler_kwargs"]  # [sampler_kwargs for dataset b]
-    FUNCTION_KWARGS = eval_task["function_kwargs"]  # [function_kwargs for dataset b]
     XOPT = eval_task["Xopt"].to(
         dtype=torch.float32, device=config.experiment.device
     )  # (B, num_global_optima, d_x)
@@ -516,8 +503,7 @@ def evaluate(
                 seed=seed,
                 Xopt=XOPT[b],
                 yopt=YOPT[b],
-                sampler_kwargs=SAMPLER_KWARGS[b],
-                function_kwargs=FUNCTION_KWARGS[b],
+                utility=eval_task["utility"],
                 test_x_range=TEST_X_RANGE,
                 train_x_range=TRAIN_X_RANGE,
                 initial_pairs=initial_pairs[b],

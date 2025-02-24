@@ -1,0 +1,7 @@
+defaults: 
+  - datasets@data: GP1D
+  - _evaluate
+  - _self_
+
+experiment:
+  model: PABBO

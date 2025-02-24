@@ -128,38 +128,6 @@ def get_random_split_data(
     return num_ctx_pairs, ctx_idx, num_tar_pairs, tar_idx
 
 
-def generate_gp_initialization(
-    sampler,
-    seeds: Union[List, int],
-    B: int,
-    num_initial_pairs: int = 1,
-) -> Dict:
-    """Generate gp test initialization.
-
-    Args:
-        sampler: a sampler object.
-        seeds: list of random seeds for testing. If int, a list [0...seeds] is created and used.
-        B: batch size.
-        num_initial_pairs, scalar: number of initial pairs.
-
-    Returns: initialization, Dict{"seed": {"attribute": "value"}}, where attributes include:
-            initial_pairs, tensor(B, num_initial_pairs, 2 * d_x)
-            initial_pairs_y, tensor(B, num_initial_pairs, 2)
-            initial_c, tensor(B, num_initial_pairs, 2)
-            Xopt, tensor(B, num_global_optima, d_x)
-            ypot, tensor(B, num_global_optima, 1)
-            test_x_range, List of d_x 2-element tuple: the input range of test data.
-            train_x_range, List of d_x 2-element tuple
-            sampler_kwargs, Dict{}: setup the test kernel function
-            function_kwargs, Dict{}: setup the OtimizationFunction wrapper
-
-
-    """
-    if isinstance(seeds, int):
-        seeds = [*range(seeds)]
-    raise NotImplementedError
-
-
 class My1DInterpolator:
     def __init__(self, X, y: np.ndarray, interpolator_type: str = "nearest"):
         """1-dimensional interpolator.

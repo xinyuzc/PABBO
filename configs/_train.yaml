@@ -72,11 +72,9 @@ model:
   emb_depth: 3
   tok_emb_option: ind_point_emb_sum
   joint_model_af_training: true
-  use_value_network: False
   af_name: mlp 
   bound_std: False 
   nbuckets: 2
-  y_range: 3.0
   transformer_encoder_layer_cls: efficient
   time_budget: true
 

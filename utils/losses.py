@@ -63,17 +63,12 @@ def kendalltau_correlation(
     Returns:
         cor, (1) if reduce else (B,)"""
     B = pred.shape[0]
-
-    # send to CPU
-    if pred.is_cuda:
-        pred = pred.detach().cpu()
-    if y.is_cuda:
-        y = y.detach().cpu()
-
     # NOTE perform over each dataset as `kendalltau` function will flatten non-1D arrays.
     cor = np.stack(
         [
-            kendalltau(pred[b].squeeze().numpy(), y[b].numpy()).correlation
+            kendalltau(
+                pred[b].squeeze().detach().cpu().numpy(), y[b].detach().cpu().numpy()
+            ).correlation
             for b in range(B)
         ]
     )

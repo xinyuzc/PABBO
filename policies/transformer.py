@@ -119,14 +119,12 @@ class TransformerBase(nn.Module):
         c_src: torch.Tensor,
         eval_pos: torch.Tensor,
         num_src: int,
-        num_eval: int,
     ) -> torch.Tensor:
         """Input embedding.
         Args: let `B` be the batch size, `num_src` be the number of context pairs, `num_eval` be the number of target locations,
             query_src, [B, num_src, n_comp * d_x]: a batch of context queries, each consists of `num_src` queries with `n_comp` alternatives.
             c_src, [B, num_src, d_c]: preference label associated with context pairs.
             eval_pos, [B, num_eval, d_x]: a batch of target locations, each consists of `num_eval` locations.
-            num_eval, scalar: the number of target locations. (dummy)
         Returns:
             emb, [B, num_src + num_eval, d_model]: embeddings for context pairs and target locations.
         """
@@ -189,7 +187,7 @@ class TransformerBase(nn.Module):
         """
         device = query_src.device
         mask, num_src, num_eval = self.create_mask(query_src, eval_pos, device=device)
-        emb = self.embed_input(query_src, c_src, eval_pos, num_src, num_eval)
+        emb = self.embed_input(query_src, c_src, eval_pos, num_src)
         out = self.encoder(emb, mask=mask)
         return out, num_eval, emb
 
@@ -208,11 +206,9 @@ class TransformerModel(TransformerBase):
         tok_emb_option: str = "ind_point_emb_sum",
         transformer_encoder_layer_cls="efficient",
         joint_model_af_training: bool = True,
-        use_value_network: bool = False,
         af_name: str = "mlp",
         bound_std: bool = False,
         nbuckets: int = 2,
-        y_range: float = 3.0,
         time_budget: bool = True,
     ):
         """Preferential amortized black-box optimization (PABBO).
@@ -226,11 +222,9 @@ class TransformerModel(TransformerBase):
             token_emb_option, str: the method for embedding the tokens. Default to be ``ind_point_emb_sum`` which is presented in the paper
             transformer_encoder_layer_cls, str: the class of Transformer encoder layer.
             joint_model_af_training, bool: whether to jointly train transformer. Default as True.
-            use_value_network, bool: whether to use value network (dummy)
             af_name, str: acquisition function. Default as "mlp".
             bound_std, bool: whether to bound the standard deviation range of the Gaussian prediction head. Default as False.
             nbuckets, scalar: prediction head output dimension. Default as 2 and a Gaussian prediction head is used.
-            y_range, float: to obtain predicted function values' range,(-y_range, y_range), when setting up Riemann distribution (dummy).
             time_budget, bool: whether to pass t / T to the acquisition head.
         """
         super().__init__(
@@ -249,9 +243,7 @@ class TransformerModel(TransformerBase):
         self.bound_std = bound_std
         self.af_name = af_name
         self.joint_model_af_training = joint_model_af_training
-        self.use_value_network = use_value_network
         self.nbuckets = nbuckets
-        self.y_range = y_range
         self.time_budget = time_budget
 
         if self.nbuckets > 2:
@@ -279,7 +271,6 @@ class TransformerModel(TransformerBase):
         acquire_comb_idx: Union[torch.Tensor, None] = None,
         t: int = 1,
         T: int = 1,
-        best_y: Union[torch.Tensor, None] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Perform prediction / acquisition.
         Args:
@@ -290,18 +281,16 @@ class TransformerModel(TransformerBase):
             acquire_comb_idx, [1, num_query_pairs, 2]: indices from the full combinations of target locations, so as to create query pair set Q.
             t, scalar: current optimization step.
             T, scalar: horizon budget.
-            best_y [B, ]: (dummy)
 
         Returns:
             eval_af [B, num_query_pairs, 1]: acquistion values for all pairs in the query pair set.
             eval_f [B, num_eval, 1]: Gaussian mean for function distribution.
             eval_f_std [B, num_eval, 1]: Gaussian variance for function distribution.
-            eval_vf [B, ]: (dummy)
         """
         B, num_eval = eval_pos.shape[:-1]
         device = query_src.device
 
-        eval_af, eval_vf = None, None
+        eval_af = None
         eval_f, eval_f_std = None, None
 
         z, num_eval, _ = self.encode(
@@ -340,9 +329,6 @@ class TransformerModel(TransformerBase):
             else:
                 raise ValueError(f"Remove for simplicity.")
 
-            if self.use_value_network:
-                eval_vf = self.value_head(state_ix).squeeze()
-
         else:  # prediction task
             eval_bucket_output = self.eval_bucket_decoder(z_eval)
 
@@ -355,4 +341,4 @@ class TransformerModel(TransformerBase):
                 eval_f = dist.rsample()
             else:
                 raise ValueError("Remove for simplicity.")
-        return eval_af, eval_f, eval_f_std, eval_vf
+        return eval_af, eval_f, eval_f_std

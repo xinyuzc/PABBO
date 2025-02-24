@@ -1,0 +1,69 @@
+defaults:
+  - hydra: default  
+  - wandb_cfg@wandb: default
+  - _self_
+
+experiment: 
+  model: qTS
+  mode: eval
+  expid: ${experiment.model}_${data.name}_${now:%Y%m%d_%H%M%S}
+  device: cpu
+  wandb: true
+  override: true
+
+data: 
+  name: ""
+  d_x: -1
+  Xopt: []
+  yopt: []
+  x_range: []
+  min_num_ctx: -1
+  max_num_ctx: -1
+
+wandb: 
+  name: ${experiment.expid}
+  group: ${experiment.model}
+  job_type: debug
+  tags: ['${experiment.model}', evaluation, '${data.name}']
+
+train: 
+  x_i_range: [-1, 1]
+
+eval: 
+  dataset_id: 0
+  seed_id: 0
+  num_seeds: 30 
+  num_datasets: 30 
+  num_total_points: 100
+  num_initial_pairs: 1
+  p_noise: 0.
+  eval_max_T: 30
+  sampler:
+    kernel_list: [rbf, matern52, matern32, matern12]
+    sample_kernel_weights: [0.25, 0.25, 0.25, 0.25]
+    lengthscale_range: [0.05, 2]
+    std_range: [0.1, 2]
+    p_iso: 0.5
+  interpolator_type: linear
+  eval_num_query_points: 256
+  argmax: false
+  plot_freq: -1
+  plot_dataset_id: -1
+  plot_seed_id: -1
+
+model: 
+  d_x: ${data.d_x}
+  d_f: 1
+  d_model: 64
+  nhead: 4
+  dropout: 0.0
+  n_layers: 6
+  dim_feedforward: 128
+  emb_depth: 3
+  tok_emb_option: ind_point_emb_sum
+  joint_model_af_training: true
+  af_name: mlp 
+  bound_std: False 
+  nbuckets: 2
+  transformer_encoder_layer_cls: efficient
+  time_budget: true

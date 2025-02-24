@@ -296,7 +296,6 @@ class UtilitySampler(object):
 class OptimizationSampler(object):
     def __init__(
         self,
-        d_x: int,
         kernel_list: list = [rbf, matern52, matern32, matern12],
         sample_kernel_weights: list = [0.25, 0.25, 0.25, 0.25],
         lengthscale_range: list = [0.05, 2],
@@ -310,7 +309,6 @@ class OptimizationSampler(object):
         """sampler for GP samples with a global optimum.
 
         Args:
-            d_x, scalar: input dimension.
             kernel_list, list: the list of kernels.
             sample_kernel_weights, list: the probabilities of each kernel type being used.
             lengthscale_range: parameterize lengthscale distribution.
@@ -360,7 +358,6 @@ class OptimizationSampler(object):
         self.std_range = std_range
         self.p_iso = p_iso
 
-        self.d_x = d_x
         self.maximize = maximize
         self.device = device
 
@@ -481,6 +478,7 @@ class OptimizationSampler(object):
             utility, OptimizationFunction: the GP curve.
         """
         # sample context size
+        self.d_x = x_range.shape[0]
         num_ctx_points = random.randint(3, max_num_ctx_points)
 
         # sample length_scale and sigma_f for kernel

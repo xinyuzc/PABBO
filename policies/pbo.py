@@ -36,10 +36,6 @@ class PBOHandler:
         self.max_retries = max_retries
         self.p_noise = p_noise
 
-    def reverse_comp(self, c: torch.Tensor) -> torch.Tensor:
-        """reverse the preference comparison indicator."""
-        pass
-
     def load_pabbo_data(
         self, pair: torch.Tensor, pair_y: torch.Tensor, c: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -70,9 +66,9 @@ class PBOHandler:
         # record comparison between datapoints in each pair. [[0, 1], [2, 3], ..., [2*n_pairs-2, 2*n_pairs-1]]
         comp = np.arange(2 * n_pairs).reshape(-1, 2)
         # flip when utility value at c[i, 1] is preferred
-        flip_indices = (c == 1).cpu().squeeze(-1).numpy()
+        flip_indices = (c == 1).cpu().reshape(n_pairs).numpy()  # (n_pairs)
         comp[flip_indices, :] = np.flip(comp[flip_indices, :], 1)
-        comp = torch.tensor(comp).long()
+        comp = torch.tensor(comp).long().to(y.device)
 
         return X, y, comp
 
@@ -82,7 +78,7 @@ class PBOHandler:
         """Generate `n_comp` comparisons on the set of datapoints.
 
         Args:
-            y, (num_points, 1): utility values at `num_points` datapoints.
+            y, (num_points, 1): utility values associated with `num_points` datapoints.
             n_comp, scalar: the number of comparisons to generate.
             replace, bool: whether to sample comparisons with or without replacement.
 
@@ -93,16 +89,17 @@ class PBOHandler:
         all_combinations = np.array(list(combinations(range(y.shape[0]), 2)))
         comp = all_combinations[
             np.random.choice(range(len(all_combinations)), n_comp, replace=replace)
-        ]
+        ]  # (num_comp, 2)
         comp_y = y[comp].squeeze(-1)  # (num_comp, 2, 1) -> (num_comp, 2)
-        # get (noisy) preference
+        # (noisy) observation
         comp_y += self.p_noise * torch.randn_like(comp_y, device=self.device)
-        # get comparison
+
+        # flip when utility value at c[i, 1] is preferred
         flip_indices = (
-            (comp_y[..., 0] > comp_y[..., 1]).squeeze(-1).cpu().numpy()
+            (comp_y[..., 0] < comp_y[..., 1]).reshape(n_comp).cpu().numpy()
         )  # (num_comp)
         comp[flip_indices, :] = np.flip(comp[flip_indices, :], 1)
-        comp = torch.tensor(comp).long().to(y)
+        comp = torch.tensor(comp).long().to(y.device)
         return comp
 
     def update_data(
@@ -131,9 +128,7 @@ class PBOHandler:
         next_X = next_X.to(X)
         next_y = next_y.to(y)
         # generate new comparison
-        next_comp = self.generate_comparisons(
-            next_y, n_comp=n_comp, p_noise=self.p_noise
-        )
+        next_comp = self.generate_comparisons(y=next_y, n_comp=n_comp)
         # NOTE shift indices of next_comp
         comp = torch.cat([comp, next_comp + X.shape[-2]])
         X = torch.cat([X, next_X])
@@ -196,12 +191,14 @@ class PBOHandler:
         d_x = X.shape[-1]
         acq_vals = None
         if acq_function_type == "rs":
+            # randomly sample two points from the input space
             next_X = torch.rand((q, d_x)).to(X) * (X_bound[1] - X_bound[0]) + X_bound[0]
         elif acq_function_type == "qTS":
             next_X = []
-            # we sample 2 draws from the GP posterior and choose the maximum respectively to form the next query
+
+            # sample 2 draws from the posterior and choose the maximum respectively
             for _ in range(q):
-                # (RAW_SAMPLES, d_x), draw sobol samples from defined bounded space
+                # (RAW_SAMPLES, d_x) sobol samples from input space
                 draws = draw_sobol_samples(bounds=X_bound, n=RAW_SAMPLES, q=1).squeeze(
                     -2
                 )
@@ -260,6 +257,7 @@ class PBOHandler:
         T: int,
         test_x_range: torch.Tensor,
         utility: Callable,
+        **kwargs,
     ) -> Tuple:
         """PBO on either 1) bounded countinuous input space, or 2) discrete intput space.
         NOTE continuous input are assumed to be normalised, i.e., x \in (0, 1)
@@ -292,7 +290,7 @@ class PBOHandler:
         d_x = X.shape[-1]
 
         # unit bound. We assume input has been normalised.
-        X_bound = torch.stack([torch.zero(d_x), torch.ones(d_x)]).to(X)  # (2, d_x)
+        X_bound = torch.stack([torch.zeros(d_x), torch.ones(d_x)]).to(X)  # (2, d_x)
 
         # fit model
         t0 = time.time()
@@ -314,15 +312,15 @@ class PBOHandler:
                 acq_function_type=acq_function_type,
                 X=X,
                 X_bound=X_bound,
-            )
+            )  # (2, d_x)
             t1 = time.time()
             acq_time = t1 - t0
 
-            # compute ground truth utility value
+            # NOTE scale unit X to test range before computing the utility value
             next_X_scale = test_x_range[..., 0] + next_X.clone() * (
                 test_x_range[..., 1] - test_x_range[..., 0]
-            )  # NOTE scale unit X to test range before computing the utility value
-            next_y = utility(next_X_scale)  # (q, 1)
+            )
+            next_y = utility(next_X_scale)  # (2, 1)
 
             # update observations
             X, y, comp = self.update_data(
@@ -340,6 +338,7 @@ class PBOHandler:
                 _, model = self.fit_model(X=X, comp=comp)
             t1 = time.time()
             model_fitting_time = t1 - t0
+
         # cumulative inference time
         cumulative_inference_time = torch.from_numpy(np.cumsum(t)).to(X)
         simple_regret = torch.cat(simple_regret)  # (T+1)
@@ -457,6 +456,7 @@ class PBOHandler:
         y_pending: torch.Tensor,
         T: int,
         interpolator_type: str = "nearest",
+        **kwargs,
     ):
         """PBO on discrete input space.
 

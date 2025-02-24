@@ -113,7 +113,7 @@ def generate_query_pair_set(
     X: torch.Tensor,
     y: torch.Tensor,
     num_total_points: int,
-    n_random_pairs: Union[None, int],
+    n_random_pairs: Union[None, int] = None,
     maximize: bool = True,
     p_noise: float = 0.0,
     rank_latent_value: bool = False,
