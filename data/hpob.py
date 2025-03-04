@@ -311,7 +311,7 @@ class HPOBHandler:
 
     def sample(
         self,
-        search_space_id: int,
+        search_space_id: str,
         num_points: int,
         batch_size: int = 1,
         standardize: bool = True,
@@ -322,7 +322,7 @@ class HPOBHandler:
         """sample a batch of data from specified search space.
 
         Args:
-            search_space_id, int: ID of search space.
+            search_space_id, str: ID of search space.
             batch_size, int: number of datasets to sample in specified search space. All datasets are returned if `batch_size` is larger than the total number.
             num_points, int:  number of samples in each dataset. The entire dataset is returned if `num_points` is larger than dataset size.
             standardize, bool: whether to standardize y.

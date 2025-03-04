@@ -12,6 +12,55 @@ from data.utils import *
 GRID_SIZE = 1000  # sobol grid size
 
 
+def transform_with_global_optimum(
+    x_range: torch.Tensor,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    xopt: torch.Tensor,
+    f_offset: torch.Tensor,
+    maximize: bool = True,
+):
+    """transform utility values to ensure a global optimum at xopt.
+    Specifically - a global maximum (-f_offset) if maximize=True,
+    or a global minimum f_offset otherwise.
+
+    Args:
+        x_range, (d_x, 2): data range of each input dimension.
+        x, (num_points, d_x): datapoints with d_x features.
+        y, (num_points, 1): associated utility values.
+        xopt, (1, d_x): global minimum location.
+        f_offset, (1): function offset.
+        maximize, bool: global maximum or minimum.
+
+    Returns:
+        f: transformed utility values.
+        yopt: the global optimum.
+    """
+    # we use broader lengthscale for wider input space
+    # 1 / 2 * mean(range ** 2)
+    quad_lengthscale_squared = 2 * torch.mean(
+        (x_range[:, 1].float() - x_range[:, 0].float()) ** 2
+    )
+    quadratic_factor = 1.0 / quad_lengthscale_squared
+
+    # f = |y| + 1/8 ||x - xopt|| ** 2 + f_offset
+    f = (
+        torch.abs(y)
+        + quadratic_factor
+        * torch.sum((x - xopt) ** 2, dim=-1, keepdim=True)  # (B, num_test_points, 1)
+        + f_offset
+    )
+    y = f
+    yopt = f_offset
+
+    # flip the function
+    if maximize:
+        f = -f
+        yopt = -f_offset
+
+    return f, yopt
+
+
 class SimpleGPSampler(object):
     def __init__(self, mean: torch.Tensor, kernel_function: rbf, jitter=1e-4):
         """A GP sampler.
@@ -52,7 +101,7 @@ class SimpleGPSampler(object):
         n_samples=1,
         correlated=True,
     ):
-        mean = self.mean.to(test_X)  # NOTE send mean to test device
+        mean = self.mean.to(train_X)  # NOTE send mean to test device
 
         K = self.kernel_function(train_X, train_X, length_scale, std)
         K_s = self.kernel_function(train_X, test_X, length_scale, std)
@@ -75,7 +124,7 @@ class SimpleGPSampler(object):
                 L, torch.randn(len(test_X), n_samples).to(train_X)
             )
         else:
-            K_ss_diag = std.pow(2) * torch.ones(len(test_X))
+            K_ss_diag = std.pow(2) * torch.ones(len(test_X)).to(train_X)
             var = K_ss_diag - torch.sum(Lk**2, dim=0)
             mask = (
                 var < self.jitter
@@ -143,20 +192,19 @@ class OptimizationFunction:
         sigma_f: torch.Tensor,
         f_offset: torch.Tensor,
     ):
-        """A wrapper for a GP curve with injected global optimal structure.
+        """function with global optimum structue by transforming GP datapoints.
 
         Args:
-            sampler, SimpleGPSampler: a GP sampler with assigned training data and kernel hyperparameters.
-            maximize, bool: function with maximum or minimimum.
-            x_range, (d_x, 2): input range.
-            train_X, [num_train, d_x]: training points
-            train_y, [num_train, 1]: function values at training points.
-            Xopt, [1, d_x]: optimum.
-            length_scale, [d_x]: length scales over dimensions.
-            sigma_f, [1]: function scale.
-            f_offset, [1]: function offset from zero mean.
+            sampler, SimpleGPSampler: sampler for a defined GP over the input space.
+            maximize, bool: whether to create function with global maximum or minimum.
+            x_range, (d_x, 2): data range for each input dimension.
+            train_X, [num_train_points, d_x]: training datapoints
+            train_y, [num_train_points, 1]: associated utility values.
+            Xopt, [1, d_x]: optimum location.
+            length_scale, [d_x]: lengthscales for the GP.
+            sigma_f, [1]: std for the GP.
+            f_offset, [1]: function offset.
         """
-        # TODO fix bugs regarding device: can only be evaluated on device on which training data were.
         self.sampler = sampler
         self.maximize = maximize
         self.x_range = x_range
@@ -169,46 +217,35 @@ class OptimizationFunction:
         self.f_offset = f_offset
 
     def __call__(self, test_X: torch.Tensor) -> torch.Tensor:
-        """Sample function values at `test_X` from the GP curve.
+        """Sample utility values at `test_X`.
+
         Args:
             test_X, (B, num_test_points, d_x): test locations.
 
         Returns:
-            test_y, (B, num_test_points, 1): sampled function values.
+            test_y, (B, num_test_points, 1): associated utility values.
         """
-        # sample from the GP
-        device = test_X.device
-        test_X = test_X.to(self.train_X)
+        # first sample from the GP
         test_y = self.sampler.sample(
             test_X=test_X,
-            train_X=self.train_X,
-            train_y=self.train_y,
-            length_scale=self.length_scale,
-            std=self.sigma_f,
+            train_X=self.train_X.to(test_X),
+            train_y=self.train_y.to(test_X),
+            length_scale=self.length_scale.to(test_X),
+            std=self.sigma_f.to(test_X),
             correlated=False,
         )
 
-        # add the quadratic bowl
-        quad_lengthscale_squared = torch.sum(
-            (2 * (self.x_range[:, 1].float() - self.x_range[:, 0].float())) ** 2
-        )  # (1)
-
-        quadratic_factor = 1.0 / quad_lengthscale_squared
-        f = (
-            torch.abs(test_y)
-            + quadratic_factor
-            * torch.sum(
-                (test_X - self.Xopt) ** 2, dim=-1, keepdim=True
-            )  # (B, num_test_points, 1)
-            + self.f_offset
+        # then transform the GP utility values
+        test_y, self.yopt = transform_with_global_optimum(
+            x_range=self.x_range.to(test_X),
+            x=test_X,
+            y=test_y,
+            xopt=self.Xopt.to(test_X),
+            f_offset=self.f_offset.to(test_X),
+            maximize=self.maximize,
         )
-        test_y = f
 
-        # flip the function values if doing maximization
-        if self.maximize:
-            test_y = -test_y
-
-        return test_y.to(device)
+        return test_y
 
 
 class UtilitySampler(object):
@@ -242,9 +279,9 @@ class UtilitySampler(object):
 
     def sample(
         self,
+        x_range: List[List[float]],
         batch_size: int = 16,
         num_total_points: int = 100,
-        x_range: List[List[float]] = [[0.0, 1.0]],
         sobol_grid: bool = False,
         **kwargs,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -263,7 +300,7 @@ class UtilitySampler(object):
             yopt, [B, num_opt, 1]: optimal function values.
         """
         x_range = torch.tensor(x_range)
-
+        assert x_range.shape[0] == self.d_x
         # quasi-random samples over input space
         if sobol_grid:
             x = (
@@ -306,7 +343,7 @@ class OptimizationSampler(object):
         device: str = "cuda",
         **kwargs,
     ) -> None:
-        """sampler for GP samples with a global optimum.
+        """sampler for GP sample-based functions with global optimum structure.
 
         Args:
             kernel_list, list: the list of kernels.
@@ -317,9 +354,6 @@ class OptimizationSampler(object):
             maximize, bool: whether to create maximum or minimum. Default true.
             seed, int: random seed.
             device: default cuda.
-
-        Attrs:
-            batch_utility, Sequence[OptimizationFunction]: save previous sampled batch of GP curves.
         """
         self.seed = seed
         if seed is not None:
@@ -334,20 +368,9 @@ class OptimizationSampler(object):
 
         # get kernel functions by names
         if isinstance(kernel_list[0], str):
-            # get a dict of all kernel functions in data.kernel module
-            # kernel_func_dict = {
-            #     key: value for key, value in getmembers(kernel_module, isfunction)
-            # }
-            # {
-            #     "rbf": rbf,
-            #     "matern52": matern52,
-            #     "matern32": matern32,
-            #     "matern12": matern12,
-            # }
             self.kernel_list = []
             for k in kernel_list:
                 if k in globals():  # we have import functions in data.kernel
-                    # if k in kernel_func_dict:
                     self.kernel_list.append(globals()[k])
                 else:
                     raise ValueError(f"kernel function `{k}` is not supported.")
@@ -373,7 +396,7 @@ class OptimizationSampler(object):
         evaluate: bool = False,
         **kwargs,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """sample points from a batch of GP curves which are injected with a gobal optimum.
+        """sample points from a batch of functions.
 
         Args:
             batch_size, int: the size of data batch.
@@ -388,11 +411,11 @@ class OptimizationSampler(object):
             y, (B, num_total_points, 1): corresponding function values.
             xopt, (B, 1, d_x): : location of optimum.
             yopt, (B, 1, 1): optimal function value.
+            utility, [B]: the functions.
         """
         (_X, _Y, _XOPT, _YOPT, _UTILITY) = ([], [], [], [], [])
         x_range = torch.tensor(x_range)  # (d_x, 2)
         for _ in range(batch_size):
-            # create a GP curve and sample points
             x, y, xopt, yopt, utiltiy = self.sample_a_function(
                 max_num_ctx_points=max_num_ctx_points,
                 num_total_points=num_total_points,
@@ -410,12 +433,12 @@ class OptimizationSampler(object):
             if utiltiy is not None:
                 _UTILITY.append(utiltiy)
 
-        self.batch_utility = _UTILITY  # [batch_size]
         return (
             torch.stack(_X, dim=0),
             torch.stack(_Y, dim=0),
             torch.stack(_XOPT, dim=0),
             torch.stack(_YOPT, dim=0),
+            _UTILITY,
         )
 
     def sample_length_scale(self) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -461,7 +484,7 @@ class OptimizationSampler(object):
         torch.Tensor,
         OptimizationFunction,
     ]:
-        """sample points from a single GP curve which are injected with a gobal optimum.
+        """create and sample from a function.
 
         Args:
             x_range, (d_x, 2): input range.
@@ -475,7 +498,7 @@ class OptimizationSampler(object):
             y, (num_total_points, 1): corresponding function values.
             xopt, (1, d_x): :the global optimum.
             yopt, (1, 1): the global optimal value.
-            utility, OptimizationFunction: the GP curve.
+            utility, OptimizationFunction: the function.
         """
         # sample context size
         self.d_x = x_range.shape[0]
@@ -500,14 +523,14 @@ class OptimizationSampler(object):
         temp_samples = torch.abs(torch.normal(temp_mean, temp_stds))  # [n_temp]
         mean_f = temp_samples.max()  # [1]
 
-        #  introduce a sharp optimum with a minor probability
+        #  a sharp optimum with a minor probability
         p_rare, rare_tau = 0.1, 1.0
         if torch.rand(1) < p_rare:
             mean_f = mean_f + torch.exp(torch.tensor(rare_tau))
 
-        # sample input location
+        # sample input locations
         if evaluate:
-            # all locations are quasi-random samples over input space
+            # for evaluation, sample quasi-random samples over input space
             x_tmp = torch.tensor(
                 create_sobol_grid(
                     d_x=self.d_x,
@@ -520,7 +543,7 @@ class OptimizationSampler(object):
             x_fix = x_tmp[: num_ctx_points - 1]
             x_ind = x_tmp[num_ctx_points - 1 :]
         else:
-            # all locations are sampled from a sufficiently large set of quasi-random samples
+            # sampled quasi-random samples
             if sobol_grid:
                 x_tmp = torch.tensor(
                     create_sobol_grid(
@@ -534,7 +557,7 @@ class OptimizationSampler(object):
                 x_fix = x_tmp[perm_idx[: num_ctx_points - 1]]
                 x_ind = x_tmp[perm_idx[num_ctx_points:num_total_points]]
             else:
-                # sample from a uniform distribution
+                # uniform samples
                 x_fix = x_range[:, 0] + (x_range[:, 1] - x_range[:, 0]) * torch.rand(
                     [num_ctx_points - 1, self.d_x],
                     device=self.device,
@@ -544,15 +567,12 @@ class OptimizationSampler(object):
                     device=self.device,
                 )
 
-        # create the global minimum, (x^*, 0)
-        # randomly sample a location
+        # sample the optimum location and set utility value as zero
         xopt = (
             torch.rand(self.d_x, device=self.device) * (x_range[:, 1] - x_range[:, 0])
             + x_range[:, 0]
-        ).view(
-            1, -1
-        )  # [1, d_x]
-        yopt = torch.zeros(size=(1, 1))  # [1, 1] NOTE zero-value minimum
+        ).view(1, -1)
+        yopt = torch.zeros(size=(1, 1))
 
         # sample a kernel
         kernel = random.choices(
@@ -562,7 +582,7 @@ class OptimizationSampler(object):
         # define a GP sampler
         gp_sampler = SimpleGPSampler(mean=mean_f, kernel_function=kernel)
 
-        # sample y values for the fixed points conditioned on the optimum
+        # correlated samples at fixed locations when conditioned on the optimum points
         y_fix = gp_sampler.sample(
             test_X=x_fix,
             train_X=xopt,
@@ -570,33 +590,30 @@ class OptimizationSampler(object):
             length_scale=length_scale,
             std=sigma_f,
         )
-
         x_fix = torch.cat([x_fix, xopt], dim=0)
         y_fix = torch.cat([y_fix, yopt], dim=0)
 
-        # sample y values for the additional points
+        # uncorrelated samples at the rest of locations
         y_ind = gp_sampler.sample(
             test_X=x_ind,
             train_X=x_fix,
             train_y=y_fix,
             length_scale=length_scale,
             std=sigma_f,
-            correlated=False,  # NOTE use uncorrelated samples to speed up the sampling.
+            correlated=False,  # NOTE speed up the sampling
         )
 
         # combine data
         x = torch.cat([x_ind, x_fix], dim=0)
         y = torch.cat([y_ind, y_fix], dim=0)
 
-        # add a random offset to the function
+        # sample a random function offset
         f_offset_range = [-5, 5]
         f_offset = (
             torch.rand(1) * (f_offset_range[1] - f_offset_range[0]) + f_offset_range[0]
-        ).view(
-            1, -1
-        )  # [1, 1]
+        ).view(1, -1)
 
-        # save the curve for evaluation
+        # create function with global optimum structure by transforming the GP samples
         if evaluate:
             utility = OptimizationFunction(
                 sampler=gp_sampler,
@@ -609,31 +626,16 @@ class OptimizationSampler(object):
                 sigma_f=sigma_f,
                 f_offset=f_offset,
             )
+            y = utility(test_X=x)
+            yopt = utility.yopt
         else:
             utility = None
-
-        # adjust the minimum from zero to f_offset
-        yopt = f_offset
-
-        # add a quadratic bowl with broad lengthscale around the optimum
-        quad_lengthscale_squared = torch.sum(
-            (2 * (x_range[:, 1].float() - x_range[:, 0].float())) ** 2
-        )  # (1)
-
-        quadratic_factor = 1.0 / quad_lengthscale_squared
-        f = (
-            torch.abs(y)
-            + quadratic_factor
-            * torch.sum(
-                (x - xopt) ** 2, dim=-1, keepdim=True
-            )  # (B, num_test_points, 1)
-            + f_offset
-        )
-        y = f
-
-        # we were creating minimum; flip the function if maximum is required
-        if self.maximize:
-            y = -y
-            yopt = -yopt
-
+            y, yopt = transform_with_global_optimum(
+                x_range=x_range,
+                x=x,
+                y=y,
+                xopt=xopt,
+                f_offset=f_offset,
+                maximize=self.maximize,
+            )
         return x, y, xopt, yopt, utility

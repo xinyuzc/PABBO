@@ -2,7 +2,9 @@ defaults:
   - hydra: default  
   - wandb_cfg@wandb: default
   - _self_
-
+  - override hydra/hydra_logging: none  
+  - override hydra/job_logging: none  
+  
 experiment: 
   model: PABBO
   mode: train
@@ -16,14 +18,6 @@ wandb:
   group: ${experiment.model}
   job_type: debug
   tags: ['${experiment.model}', training, '${data.name}']
-  
-data:
-  name: GP1D
-  d_x: 1 
-  p_noise: 0.0
-  min_num_ctx: 1
-  max_num_ctx: 50
-  x_range: [[-1, 1]]
 
 train: 
   sampler: 
@@ -50,7 +44,7 @@ train:
 
   num_init_pairs: 0
   n_trajectories: 20
-  max_T: 24
+  max_T: 64
   discount_factor: 0.98
   regret_option: simple_regret
 

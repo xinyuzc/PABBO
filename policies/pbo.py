@@ -222,7 +222,6 @@ class PBOHandler:
                     sampler=sampler,
                 )
             elif acq_function_type == "mpes":
-                # TODO
                 acq_func = MultinomialPredictiveEntropySearch(
                     model=model,
                     bounds=X_bound,
@@ -296,6 +295,8 @@ class PBOHandler:
         t0 = time.time()
         if acq_function_type != "rs":
             _, model = self.fit_model(X=X, comp=comp)
+        else:
+            model = None
         t1 = time.time()
         model_fitting_time = t1 - t0
 
@@ -372,11 +373,11 @@ class PBOHandler:
         """
         if X_pending.shape[-1] == 1:
             utility = My1DInterpolator(
-                X=X_pending, y=y_pending, interpolator=interpolator_type
+                X=X_pending, y=y_pending, interpolator_type=interpolator_type
             )
         else:
             utility = MyNDInterpolator(
-                X=X_pending, y=y_pending, interpolator=interpolator_type
+                X=X_pending, y=y_pending, interpolator_type=interpolator_type
             )
         return utility
 
@@ -386,6 +387,7 @@ class PBOHandler:
         acq_function_type: str,
         X: torch.Tensor,
         X_pending: torch.Tensor,
+        X_bound: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """PBO step on discrete input space.
 
@@ -435,8 +437,9 @@ class PBOHandler:
                     prune_baseline=True,
                 )
             elif acq_function_type == "mpes":
-                raise NotImplementedError(
-                    f"mpes on discrete input space is not supported."
+                acq_func = MultinomialPredictiveEntropySearch(
+                    model=model,
+                    bounds=X_bound,
                 )
             else:
                 raise ValueError(f"{acq_function_type} is not supported.")
@@ -454,6 +457,7 @@ class PBOHandler:
         initial_c: torch.Tensor,
         X_pending: torch.Tensor,
         y_pending: torch.Tensor,
+        test_x_range: torch.Tensor,
         T: int,
         interpolator_type: str = "nearest",
         **kwargs,
@@ -498,6 +502,8 @@ class PBOHandler:
         t0 = time.time()
         if acq_function_type != "rs":
             _, model = self.fit_model(X=X, comp=comp)
+        else:
+            model = None
         t1 = time.time()
         model_fitting_time = t1 - t0
 
@@ -514,6 +520,7 @@ class PBOHandler:
                 acq_function_type=acq_function_type,
                 X=X,
                 X_pending=X_pending,
+                X_bound=test_x_range.transpose(0, 1),
             )
             t1 = time.time()
             acq_time = t1 - t0
@@ -539,8 +546,8 @@ class PBOHandler:
             model_fitting_time = t1 - t0
         # cumulative inference time
         cumulative_inference_time = torch.from_numpy(np.cumsum(t)).to(X)
-        simple_regret = torch.cat(simple_regret)  # (T+1)
-        immediate_regret = torch.cat(immediate_regret)  # (T+1)
+        simple_regret = torch.stack(simple_regret)  # (T+1)
+        immediate_regret = torch.stack(immediate_regret)  # (T+1)
         cumulative_regret = np.cumsum(immediate_regret, axis=-1)  # (T+1)
         return (
             X,

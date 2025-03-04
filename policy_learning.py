@@ -25,7 +25,7 @@ def sample_from_masked_categorical(
     logits, mask = logits.squeeze(-1), mask.squeeze(-1)
 
     # NOTE the total number of elements remain unchanged since we are masking them from being sampled rather than kicking them out.
-    # when using "best-of-parallel small query set" at test time,
+    # when using parallel PABBO,
     # this ensures that acquisition values from all query set are comparable, no matter how many elements have been masked in any of them.
 
     m = MaskedCategorical(logits=logits, mask=mask)
@@ -40,7 +40,7 @@ def sample_from_masked_categorical(
         # sample from the masked distribution
         action = m.sample()
 
-    # for debugging: p(a) will approxiamtely be equivalent to 1 / number_of_elements, when the distribution is quite uniform
+    # for debugging: p(a) approx 1 / number_of_elements when the distribution is uniform
     log_prob = m.log_prob(action)
 
     return action.long().detach(), log_prob, entropy.detach()

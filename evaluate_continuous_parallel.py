@@ -3,7 +3,6 @@ from wandb_wrapper import init as wandb_init
 from omegaconf import DictConfig
 import torch
 import numpy as np
-import pandas as pd
 import os.path as osp
 import os
 import hydra
@@ -13,11 +12,40 @@ from utils.paths import DATASETS_PATH, RESULT_PATH
 from typing import Dict
 from policies.transformer import TransformerModel
 from data.utils import set_all_seeds
-from data.sampler import UtilitySampler
+from data.sampler import SimpleGPSampler, OptimizationFunction, UtilitySampler
 from data.kernel import *
 from data.utils import scale_from_domain_1_to_domain_2
 from data.environment import generate_query_pair_set
 from data.evaluation import *
+from data.candy_data_handler import *
+from data.sushi_data_handler import *
+from policy_learning import *
+from utils.losses import kendalltau_correlation
+from utils.plot import *
+import matplotlib.pyplot as plt
+
+
+import time
+from wandb_wrapper import init as wandb_init
+from omegaconf import DictConfig
+import torch
+import numpy as np
+import os.path as osp
+import os
+import hydra
+import wandb
+from tqdm import tqdm
+from utils.paths import DATASETS_PATH, RESULT_PATH
+from typing import Dict
+from policies.transformer import TransformerModel
+from data.utils import set_all_seeds
+from data.sampler import SimpleGPSampler, OptimizationFunction, UtilitySampler
+from data.kernel import *
+from data.utils import scale_from_domain_1_to_domain_2
+from data.environment import generate_query_pair_set
+from data.evaluation import *
+from data.candy_data_handler import *
+from data.sushi_data_handler import *
 from policy_learning import *
 from utils.losses import kendalltau_correlation
 from utils.plot import *
@@ -31,48 +59,97 @@ def main(config: DictConfig):
 
     torch.set_default_dtype(torch.float32)
     torch.set_default_device(config.experiment.device)
-    res = evaluate(config)
 
+    # load trained model
+    model = TransformerModel(**config.model)
+    root = osp.join(
+        hydra.utils.get_original_cwd(),
+        RESULT_PATH,
+        config.experiment.model,
+        config.experiment.expid,
+    )
+    if not osp.exists(root + "/ckpt.tar"):
+        raise ValueError(f"Invalid path {root}.")
+    ckpt = torch.load(
+        os.path.join(root, "ckpt.tar"), map_location=config.experiment.device
+    )
+    model.load_state_dict(ckpt["model"])
+    model.eval()
+
+    if config.data.name.startswith("GP"):
+        res = evaluate_on_gp(config, model)
+    else:
+        res = evaluate_on_deterministic_function(config, model)
+
+    # save results
+    if config.experiment.override:
+        save_dir = osp.join(
+            hydra.utils.get_original_cwd(),
+            RESULT_PATH,
+            "evaluation",
+            config.data.name,
+            config.experiment.model,
+            config.experiment.expid,
+        )
+
+        if not osp.exists(save_dir):
+            os.makedirs(save_dir, exist_ok=True)
+
+        print(f"Saving results in f{str(save_dir)}...")
+        torch.save(
+            res["simple_regret"],
+            f"{save_dir}/SIMPLE_REGRET_{config.eval.eval_num_query_points}_{config.eval.num_parallel}.pt",
+        )
+        torch.save(
+            res["immediate_regret"],
+            f"{save_dir}/IMMEDIATE_REGRET_{config.eval.eval_num_query_points}_{config.eval.num_parallel}.pt",
+        )
+        torch.save(
+            res["cumulative_regret"],
+            f"{save_dir}/CUMULATIVE_REGRET_{config.eval.eval_num_query_points}_{config.eval.num_parallel}.pt",
+        )
+        torch.save(
+            res["entropy"],
+            f"{save_dir}/ENTROPY_{config.eval.eval_num_query_points}_{config.eval.num_parallel}.pt",
+        )
+        torch.save(
+            res["kt_cor"],
+            f"{save_dir}/KT_COR_{config.eval.eval_num_query_points}_{config.eval.num_parallel}.pt",
+        )
+        torch.save(
+            res["cumulative_time"],
+            f"{save_dir}/CUMULATIVE_TIME_{config.eval.eval_num_query_points}_{config.eval.num_parallel}.pt",
+        )
+        torch.save(
+            res["inference_regret"],
+            f"{save_dir}/INFERENCE_REGRET_{config.eval.eval_num_query_points}_{config.eval.num_parallel}.pt",
+        )
+
+    # log to W&B
     if config.experiment.wandb:
+        num_seed = res["simple_regret"].shape[0]
         wandb.log(
             {
                 f"simple_regret_vs_step_plot": wandb.plot.line_series(
-                    xs=[
-                        *range(res["simple_regret"].shape[-1])
-                    ],  # list of x values: steps
-                    ys=[
-                        res["simple_regret"].mean(dim=1)[i]
-                        for i in range(res["simple_regret"].shape[0])
-                    ],  # list of y values: simple regret for each seed
-                    keys=[
-                        f"seed {i}" for i in range(res["simple_regret"].shape[0])
-                    ],  # line labels: seed
+                    xs=[*range(res["simple_regret"].shape[-1])],
+                    ys=[res["simple_regret"].mean(dim=1)[i] for i in range(num_seed)],
+                    keys=[f"seed {i}" for i in range(num_seed)],
                     title=f"Simple Regret vs Step Plot",
                     xname="Step",
                 ),
                 f"immediate_regret_vs_step_plot": wandb.plot.line_series(
-                    xs=[
-                        *range(res["immediate_regret"].shape[-1])
-                    ],  # list of x values: steps
+                    xs=[*range(res["immediate_regret"].shape[-1])],
                     ys=[
-                        res["immediate_regret"].mean(dim=1)[i]
-                        for i in range(res["immediate_regret"].shape[0])
-                    ],  # list of y values: immediate regret for each seed
-                    keys=[
-                        f"seed {i}" for i in range(res["immediate_regret"].shape[0])
-                    ],  # line labels: seed
+                        res["immediate_regret"].mean(dim=1)[i] for i in range(num_seed)
+                    ],
+                    keys=[f"seed {i}" for i in range(num_seed)],
                     title=f"Immediate Regret vs Step Plot",
                     xname="Step",
                 ),
                 f"entropy_vs_step_plot": wandb.plot.line_series(
-                    xs=[*range(res["entropy"].shape[-1])],  # list of x values: steps
-                    ys=[
-                        res["entropy"].mean(dim=1)[i]
-                        for i in range(res["entropy"].shape[0])
-                    ],  # list of y values: simple regret for each seed
-                    keys=[
-                        f"seed {i}" for i in range(res["entropy"].shape[0])
-                    ],  # line labels: seed
+                    xs=[*range(res["entropy"].shape[-1])],
+                    ys=[res["entropy"].mean(dim=1)[i] for i in range(num_seed)],
+                    keys=[f"seed {i}" for i in range(num_seed)],
                     title=f"Entropy vs Step Plot",
                     xname="Step",
                 ),
@@ -81,24 +158,16 @@ def main(config: DictConfig):
                         *range(res["inference_regret"].shape[-1])
                     ],  # list of x values: steps
                     ys=[
-                        res["inference_regret"].mean(dim=1)[i]
-                        for i in range(res["inference_regret"].shape[0])
-                    ],  # list of y values: simple regret for each seed
-                    keys=[
-                        f"seed {i}" for i in range(res["inference_regret"].shape[0])
-                    ],  # line labels: seed
+                        res["inference_regret"].mean(dim=1)[i] for i in range(num_seed)
+                    ],
+                    keys=[f"seed {i}" for i in range(num_seed)],
                     title=f"Inference Regret vs Step Plot",
                     xname="Step",
                 ),
                 f"kt_cor_vs_step_plot": wandb.plot.line_series(
                     xs=[*range(res["kt_cor"].shape[-1])],  # list of x values: steps
-                    ys=[
-                        res["kt_cor"].mean(dim=1)[i]
-                        for i in range(res["kt_cor"].shape[0])
-                    ],  # list of y values: simple regret for each seed
-                    keys=[
-                        f"seed {i}" for i in range(res["kt_cor"].shape[0])
-                    ],  # line labels: seed
+                    ys=[res["kt_cor"].mean(dim=1)[i] for i in range(num_seed)],
+                    keys=[f"seed {i}" for i in range(num_seed)],
                     title=f"Kendall-tau Correlation vs Step Plot",
                     xname="Step",
                 ),
@@ -106,7 +175,7 @@ def main(config: DictConfig):
         )
 
 
-def evaluate_a_dataset(
+def evaluate_on_a_utility(
     model: TransformerModel,
     seed: int,
     Xopt: torch.Tensor,
@@ -123,15 +192,16 @@ def evaluate_a_dataset(
     argmax: bool,
     num_parallel: int = 1,
     plot_freq: float = -1,
+    sobol_grid: bool = True,
 ) -> Dict:
-    """Evaluate PABBO on one dataset.
+    """Evaluate PABBO on a utility function with parallel query pair sets.
 
     Args:
         model: PABBO.
         seed, scalar: random seed.
         Xopt, (num_global_optima, d_x): global optimum.
         yopt, (num_global_optima, 1): the optimal utility value.
-        utility: test function that provides utility value of shape (B, N, 1) at any input of shape (B, N, d_x)
+        utility, callable: the utility function.
         test_x_range, (d_x, 2): the input range of the test function.
         train_x_range, (d_x, 2): the input range where PABBO was trained. We should scale all test inputs to the train_x_range.
         initial_pairs, (num_initial_pairs, 2 * d_x): the initial pairs.
@@ -141,7 +211,7 @@ def evaluate_a_dataset(
         p_noise, float: the observed noise when generating preference.
         T, scalar: time budget.
         argmax, bool: whether to choose the pair with maximal predicted acquisition function value as the next query or randomly sample from the policy.
-        num_parallel, scalar: number of parallel query sets to emulate a larger query set.
+        num_parallel, scalar: the number of parallel query sets.
         plot_freq, scalar: plot optimization history, inferred utility function shape with ground truth when plot_freq > 0 and (t % plot_freq == 0), t is the optimization step.
 
     Returns: a dict of metrics collected on the dataset with following elements:
@@ -154,7 +224,11 @@ def evaluate_a_dataset(
         plot, Figure: plot on the dataset.
     """
     set_all_seeds(seed)
+    d_x = Xopt.shape[-1]
+    # plot setup
     if plot_freq > 0:
+        if d_x > 2:
+            raise NotImplementedError
         num_axes = T // plot_freq
         nrows = max(int(math.ceil(num_axes / 3)), 1)
         ncols = min(3, num_axes)
@@ -162,12 +236,10 @@ def evaluate_a_dataset(
     else:
         fig = None
 
-    d_x = Xopt.shape[-1]
-
     # load initial data and add batch dim
-    # print(f"Original initial pairs: {initial_pairs}, Original Xopt: {Xopt}")
-    context_pairs_y = initial_pairs_y[None, :, :]
+    context_pairs_y = initial_pairs_y[None, :, :]  # (1, num_initial_pairs, 2)
     context_c = initial_c[None, :, :]
+
     # NOTE scale the test input to the range where PABBO was trained
     context_pairs = scale_from_domain_1_to_domain_2(
         x=initial_pairs.view(-1, d_x),
@@ -175,18 +247,19 @@ def evaluate_a_dataset(
         bound2=train_x_range,
     ).view(-1, 2 * d_x)[None, :, :]
 
-    # sampler for the utility function
+    # a sampler for the utility function
     sampler = UtilitySampler(
         d_x=d_x,
         utility_function=utility,
         Xopt=Xopt,
         yopt=yopt,
     )
-    # create query set Q
+    # NOTE create multiple parallel query sets, X of shape (num_parallel, num_query_points, d_X)
     X, y, _, _ = sampler.sample(
         batch_size=num_parallel,
         num_total_points=num_query_points,
         x_range=test_x_range,
+        sobol_grid=sobol_grid,
     )
     # NOTE scale the test input to the range where PABBO was trained
     X = scale_from_domain_1_to_domain_2(
@@ -199,15 +272,15 @@ def evaluate_a_dataset(
         bound1=test_x_range,
         bound2=train_x_range,
     )
-    # query_pair_idx of shape (num_query_pairs, 2), where num_query_pairs = (num_query_points * (num_query_points-1)) / 2
-    # candidate query pair set: the combination of any two points from Q
+    # create `num_parallel` candidate query pair set
+    # query_pair_idx (num_query_pairs, 2) only specifies possible pair indices and is shared between each candidate query pair set
     query_pair_idx, query_pair, query_pair_y, query_c = generate_query_pair_set(
         X=X,
         y=y,
         num_total_points=num_query_points,
         p_noise=p_noise,
     )
-    # (1, num_query_pairs, 1), mask to register the queried indices in the candidate query pair set
+    # mask (num_parallel, num_query_pairs, 1), register sampled pairs for each candidate query pair set
     mask = torch.ones((query_pair.shape[0], query_pair.shape[1], 1)).bool()
 
     # record metrics along the trajectory, [(1)]
@@ -227,8 +300,10 @@ def evaluate_a_dataset(
         for t in range(1, T + 1):
             # evaluate kendall-tau correlation on the query set Q
             pred_f = model(
-                query_src=context_pairs,
-                c_src=context_c,
+                query_src=context_pairs.tile(
+                    num_parallel, 1, 1
+                ),  # NOTE match size with X
+                c_src=context_c.tile(num_parallel, 1, 1),
                 eval_pos=X,
                 acquire=False,
             )[1]
@@ -243,8 +318,8 @@ def evaluate_a_dataset(
             # predict acquisition function values for all points in the query set Q
             acq_values, next_pair_idx, log_prob, entropy = action(
                 model=model,
-                context_pairs=context_pairs,
-                context_preference=context_c,
+                context_pairs=context_pairs.tile(num_parallel, 1, 1),
+                context_preference=context_c.tile(num_parallel, 1, 1),
                 t=t,
                 T=T,
                 X_pending=X,
@@ -255,18 +330,21 @@ def evaluate_a_dataset(
             t1 = time.time()
             dataset_cumulative_time.append(t1 - t0)
 
-            # update observations and candidate set given the proposed query
+            # acq_values for the sampled query in each query set
             next_pair_idx = next_pair_idx[:, None, None]  # (B, 1, 1)
-            # mask out the query pair from candidate query pair set
-            mask.scatter_(
-                dim=1,
-                index=next_pair_idx,
-                src=torch.zeros_like(mask, device=mask.device),
-            )
+            next_acq_values = gather_data_at_index(acq_values, next_pair_idx)
+
+            # choose the one with maximal acq_value as the next query
+            next_set_idx = torch.argmax(next_acq_values).int().item()  # (1)
+
+            # mask out the selected pair from corresponding query set
+            next_set_pair_idx = next_pair_idx[next_set_idx].int().item()
+            mask[next_set_idx, next_set_pair_idx] = False
+
             # update observation
-            next_pair = gather_data_at_index(data=query_pair, idx=next_pair_idx)
-            next_pair_y = gather_data_at_index(data=query_pair_y, idx=next_pair_idx)
-            next_c = gather_data_at_index(data=query_c, idx=next_pair_idx)
+            next_pair = query_pair[next_set_idx, next_set_pair_idx][None, None, :]
+            next_pair_y = query_pair_y[next_set_idx, next_set_pair_idx][None, None, :]
+            next_c = query_c[next_set_idx, next_set_pair_idx][None, None, :]
             context_pairs = torch.cat((context_pairs, next_pair), dim=1)
             context_c = torch.cat((context_c, next_c), dim=1)
             context_pairs_y = torch.cat((context_pairs_y, next_pair_y), dim=1)
@@ -292,11 +370,7 @@ def evaluate_a_dataset(
                 data=query_pair_y, idx=inference_opt_idx
             )
             dataset_inference_regret.append(
-                yopt[0].view(1)
-                - torch.max(
-                    infer_opt_pair_y.flatten(start_dim=1),
-                    dim=-1,
-                ).values
+                yopt[0].view(1) - torch.max(infer_opt_pair_y)
             )  # (1)
 
             # plot history, inferred function values with ground truth
@@ -331,6 +405,7 @@ def evaluate_a_dataset(
                         ax=ax,
                     )
                 elif d_x == 2:
+                    ax = fig.add_subplot(nrows, ncols, t // plot_freq, projection="3d")
                     plot_prediction_on_2d_function(
                         X=scale_from_domain_1_to_domain_2(
                             x=X[0].clone(), bound1=train_x_range, bound2=test_x_range
@@ -381,61 +456,57 @@ def evaluate_a_dataset(
     }
 
 
-def evaluate(
-    config: DictConfig,
+def evaluate_on_deterministic_function(
+    config: DictConfig, model: TransformerModel
 ) -> Dict:
-    """Evaluate PABBO with synthetic test functions.
-    Args:
-        config: the configuration.
-
-    Returns: a dict of metrics collected on the dataset with following elements:
-        simple_regret, (NUM_SEED, B, T+1): the simple regrets along optimization trajectory for all datasets under all random seeds.
-        immediate_regret, (NUM_SEED, B, T+1): the immediate regrets along optimization trajectory for all datasets under all random seeds.
-        cumulative_regret, (NUM_SEED, B, T): the cumulative regrets along optimization trajectory for all datasets under all random seeds.
-        inference_regret, (NUM_SEED, B, T): the inference regrets along optimization trajectory for all datasets under all random seeds.
-        entropy, (NUM_SEED, B, T): the policy head's entropy along optimization trajectory for all datasets under all random seeds.
-        kt_cor, (NUM_SEED, B, T): the kt-tau correlation on the query set Q along optimization trajectory for all datasets under all random seeds.
-        cumulative_time, (NUM_SEED, B, T): the cumulative inference time along optimization trajectory for all datasets under all random seeds.
-    """
-    # load model from saved checkpoint
-    model = TransformerModel(**config.model)
-    root = osp.join(
-        hydra.utils.get_original_cwd(),
-        RESULT_PATH,
-        config.experiment.model,
-        config.experiment.expid,
-    )
-    if not osp.exists(root + "/ckpt.tar"):
-        raise ValueError(f"Invalid path {root}.")
-    ckpt = torch.load(
-        os.path.join(root, "ckpt.tar"), map_location=config.experiment.device
-    )
-    model.load_state_dict(ckpt["model"])
-    model.eval()
-
-    # load preferential black-box optimization (PBBO) task for evaluation
+    """Evaluate PABBO on deterministic function."""
     datapath = get_evaluation_datapath(
         root=osp.join(hydra.utils.get_original_cwd(), DATASETS_PATH),
         dataname=config.data.name,
     )
     if not osp.exists(datapath):
         print(f"Generating PBBO evaluation task for {config.data.name}...")
-        eval_task = generate_test_function_evaluation_task(
-            dataname=config.data.name,
-            num_seeds=config.eval.num_seeds,
-            test_x_range=config.data.x_range,
-            train_x_range=[
-                config.train.x_i_range for _ in range(len(config.data.x_range))
-            ],
-            Xopt=torch.tensor(config.data.Xopt),
-            yopt=torch.tensor(config.data.yopt),
-            num_initial_pairs=config.eval.num_initial_pairs,
-            p_noise=config.eval.p_noise,
-        )
+        if config.data.name in ["candy", "sushi"]:
+            # get dataset handlers for real-world datasets
+            if config.data.name == "candy":
+                handler = CandyDataHandler(interpolator_type="linear")
+            else:
+                handler = SushiDataHandler(interpolator_type="linear")
+
+            _, _, Xopt, yopt = handler.get_data(add_batch_dim=True)
+            eval_task = generate_real_world_evaluation_task(
+                num_seeds=config.eval.num_seeds,
+                handler=handler,
+                test_x_range=[handler.x_range for _ in range(Xopt.shape[-1])],
+                train_x_range=[
+                    config.train.x_i_range for _ in range(len(config.data.x_range))
+                ],
+                num_initial_pairs=config.eval.num_initial_pairs,
+                p_noise=config.eval.p_noise,
+                device=config.experiment.device,
+            )
+            eval_task["utility"] = handler.get_utility()
+            eval_task["Xopt"], eval_task["yopt"] = (
+                torch.from_numpy(Xopt),
+                torch.from_numpy(yopt),
+            )
+        else:
+            # synthetic test functions
+            eval_task = generate_test_function_evaluation_task(
+                dataname=config.data.name,
+                num_seeds=config.eval.num_seeds,
+                test_x_range=config.data.x_range,
+                train_x_range=[
+                    config.train.x_i_range for _ in range(len(config.data.x_range))
+                ],
+                Xopt=torch.tensor(config.data.Xopt),
+                yopt=torch.tensor(config.data.yopt),
+                num_initial_pairs=config.eval.num_initial_pairs,
+                p_noise=config.eval.p_noise,
+            )
+
         torch.save(eval_task, datapath)
-        print(
-            f"Generated PBBO evaluation task for {config.data.name} is saved under {str(datapath)}."
-        )
+        print(f"Saved under {str(datapath)}.")
     else:
         print(
             f"Loading PBBO evaluation task for {config.data.name} from {str(datapath)}..."
@@ -447,18 +518,22 @@ def evaluate(
 
     NUM_SEEDS = eval_task["num_seeds"]
     B = eval_task["num_datasets"]
-    TEST_X_RANGE = torch.tensor(eval_task["test_x_range"]).to(
-        dtype=torch.float32, device=config.experiment.device
-    )  # (d_x, 2)
-    TRAIN_X_RANGE = torch.tensor(eval_task["train_x_range"]).to(
-        dtype=torch.float32, device=config.experiment.device
-    )  # (d_x, 2)
-    XOPT = eval_task["Xopt"].to(
-        dtype=torch.float32, device=config.experiment.device
-    )  # (B, num_global_optima, d_x)
-    YOPT = eval_task["yopt"].to(
-        dtype=torch.float32, device=config.experiment.device
-    )  # (B, num_global_optima, 1)
+    TEST_X_RANGE = torch.tensor(eval_task["test_x_range"])
+    # .to(
+    #     dtype=torch.float32, device=config.experiment.device
+    # )  # (d_x, 2)
+    TRAIN_X_RANGE = torch.tensor(eval_task["train_x_range"])
+    # .to(
+    #     dtype=torch.float32, device=config.experiment.device
+    # )  # (d_x, 2)
+    XOPT = eval_task["Xopt"]
+    # .to(
+    #     dtype=torch.float32, device=config.experiment.device
+    # )  # (B, num_global_optima, d_x)
+    YOPT = eval_task["yopt"]
+    # .to(
+    #     dtype=torch.float32, device=config.experiment.device
+    # )  # (B, num_global_optima, 1)
 
     # record metrics, (num_seeds, B, T)
     SIMPLE_REGRET = list()
@@ -498,7 +573,7 @@ def evaluate(
                 plot_freq = -1
             if config.eval.plot_seed_id >= 0 and seed != config.eval.plot_seed_id:
                 plot_freq = -1
-            dataset_metrics = evaluate_a_dataset(
+            dataset_metrics = evaluate_on_a_utility(
                 model=model,
                 seed=seed,
                 Xopt=XOPT[b],
@@ -514,6 +589,8 @@ def evaluate(
                 T=config.eval.eval_max_T,
                 argmax=config.eval.argmax,
                 plot_freq=plot_freq,
+                num_parallel=config.eval.num_parallel,
+                sobol_grid=config.eval.sobol_grid,
             )
 
             # record metrics averaged over datasets
@@ -556,28 +633,169 @@ def evaluate(
     CUMULATIVE_TIME = torch.stack(CUMULATIVE_TIME, dim=0)  # (NUM_SEED, B, T)
     INFERENCE_REGRET = torch.stack(INFERENCE_REGRET, dim=0)  # (NUM_SEED, B, T)
 
-    # save results if override
-    if config.experiment.override:
-        save_dir = osp.join(
-            hydra.utils.get_original_cwd(),
-            RESULT_PATH,
-            "evaluation",
-            config.data.name,
-            config.experiment.model,
-            config.experiment.expid,
+    return {
+        "simple_regret": SIMPLE_REGRET,
+        "immediate_regret": IMMEDIATE_REGRET,
+        "cumulative_regret": CUMULATIVE_REGRET,
+        "inference_regret": INFERENCE_REGRET,
+        "entropy": ENTROPY,
+        "kt_cor": KT_COR,
+        "cumulative_time": CUMULATIVE_TIME,
+    }
+
+
+def evaluate_on_gp(config: DictConfig, model: TransformerModel) -> Dict:
+    """Evaluate PABBO on GP samples with global optimum structure.
+
+    Returns: a dictionary of collected metrics of shape (NUM_SEED, B, H)"""
+    datapath = get_evaluation_datapath(
+        root=osp.join(hydra.utils.get_original_cwd(), DATASETS_PATH),
+        dataname=config.data.name,
+    )
+    if not osp.exists(datapath):
+        print(f"Generating PBBO evaluation task for {config.data.name}...")
+        eval_task = generate_gp_evaluation_task(
+            num_seeds=config.eval.num_seeds,
+            num_datasets=config.eval.num_datasets,
+            test_x_range=config.data.x_range,
+            train_x_range=[
+                config.train.x_i_range for _ in range(len(config.data.x_range))
+            ],
+            max_num_ctx_points=config.data.max_num_ctx,
+            num_total_points=config.eval.num_total_points,
+            num_initial_pairs=config.eval.num_initial_pairs,
+            **config.eval.sampler,
+            p_noise=config.eval.p_noise,
+            device=config.experiment.device,
+        )
+        torch.save(eval_task, datapath)
+        print(
+            f"Generated PBBO evaluation task for {config.data.name} is saved under {str(datapath)}."
+        )
+    else:
+        print(
+            f"Loading PBBO evaluation task for {config.data.name} from {str(datapath)}..."
+        )
+        eval_task = torch.load(
+            datapath,
+            map_location=config.experiment.device,
         )
 
-        if not osp.exists(save_dir):
-            os.makedirs(save_dir, exist_ok=True)
+    NUM_SEEDS = eval_task["num_seeds"]
+    B = eval_task["num_datasets"]
+    TEST_X_RANGE = torch.tensor(eval_task["test_x_range"])
+    TRAIN_X_RANGE = torch.tensor(eval_task["train_x_range"])
+    XOPT = eval_task["Xopt"]
+    YOPT = eval_task["yopt"]
+    SAMPLER_KWARGS = eval_task["sampler_kwargs"]  # [sampler_kwargs for dataset b]
+    FUNCTION_KWARGS = eval_task["function_kwargs"]  # [function_kwargs for dataset b]
 
-        print(f"Saving results under f{str(save_dir)}...")
-        torch.save(SIMPLE_REGRET, f"{save_dir}/SIMPLE_REGRET.pt")
-        torch.save(IMMEDIATE_REGRET, f"{save_dir}/IMMEDIATE_REGRET.pt")
-        torch.save(CUMULATIVE_REGRET, f"{save_dir}/CUMULATIVE_REGRET.pt")
-        torch.save(ENTROPY, f"{save_dir}/ENTROPY.pt")
-        torch.save(KT_COR, f"{save_dir}/KT_COR.pt")
-        torch.save(CUMULATIVE_TIME, f"{save_dir}/CUMULATIVE_TIME.pt")
-        torch.save(INFERENCE_REGRET, f"{save_dir}/INFERENCE_REGRET.pt")
+    # record metrics, (num_seeds, B, T)
+    SIMPLE_REGRET = list()
+    IMMEDIATE_REGRET = list()
+    ENTROPY = list()
+    KT_COR = list()
+    CUMULATIVE_TIME = list()
+    INFERENCE_REGRET = list()
+
+    # evaluate with each seed
+    for seed in range(NUM_SEEDS):
+        print(f"[Seed={seed}]\n")
+        initial_pairs, initial_pairs_y, initial_c = (
+            eval_task["initialization"][f"{seed}"]["initial_pairs"].to(
+                dtype=torch.float32, device=config.experiment.device
+            ),
+            eval_task["initialization"][f"{seed}"]["initial_pairs_y"].to(
+                dtype=torch.float32, device=config.experiment.device
+            ),
+            eval_task["initialization"][f"{seed}"]["initial_c"].to(
+                dtype=torch.float32, device=config.experiment.device
+            ),
+        )
+
+        # record metrics averaged over all datasets with seed, [(1, T)]
+        batch_simple_regret = list()
+        batch_immediate_regret = list()
+        batch_entropy = list()
+        batch_kt_cor = list()
+        batch_cumulative_time = list()
+        batch_inference_regret = list()
+
+        # evaluate on each dataset
+        for b in tqdm(range(B), f"Evaluating on {B} {config.data.name} samples..."):
+            plot_freq = config.eval.plot_freq
+            if config.eval.plot_dataset_id >= 0 and b != config.eval.plot_dataset_id:
+                plot_freq = -1
+            if config.eval.plot_seed_id >= 0 and seed != config.eval.plot_seed_id:
+                plot_freq = -1
+            # Build utility function for GP samples: we first create GP sampler with saved kernel function and mean
+            sampler = SimpleGPSampler(
+                kernel_function=globals()[SAMPLER_KWARGS[b]["kernel_function"]],
+                mean=SAMPLER_KWARGS[b]["mean"],
+                jitter=SAMPLER_KWARGS[b]["jitter"],
+            )
+            # then wrap it with `OptimizationFunction` class into the utility function
+            utility = OptimizationFunction(sampler=sampler, **FUNCTION_KWARGS[b])
+
+            dataset_metrics = evaluate_on_a_utility(
+                model=model,
+                seed=seed,
+                Xopt=XOPT[b],
+                yopt=YOPT[b],
+                utility=utility,
+                test_x_range=TEST_X_RANGE,
+                train_x_range=TRAIN_X_RANGE,
+                initial_pairs=initial_pairs[b],
+                initial_pairs_y=initial_pairs_y[b],
+                initial_c=initial_c[b],
+                num_query_points=config.eval.eval_num_query_points,
+                p_noise=config.eval.p_noise,
+                T=config.eval.eval_max_T,
+                argmax=config.eval.argmax,
+                plot_freq=plot_freq,
+                num_parallel=config.eval.num_parallel,
+                sobol_grid=config.eval.sobol_grid,
+            )
+
+            # record metrics averaged over datasets
+            batch_simple_regret.append(dataset_metrics["simple_regret"])
+            batch_immediate_regret.append(dataset_metrics["immediate_regret"])
+            batch_inference_regret.append(dataset_metrics["inference_regret"])
+            batch_cumulative_time.append(dataset_metrics["cumulative_time"])
+            batch_entropy.append(dataset_metrics["entropy"])
+            batch_kt_cor.append(dataset_metrics["kt_cor"])
+
+            # log to W&B
+            if config.experiment.wandb and plot_freq > 0:
+                wandb.log(
+                    {
+                        f"plot_dataset_{b}_seed_{seed}": wandb.Image(
+                            dataset_metrics["plot"]
+                        )
+                    }
+                )
+
+        batch_simple_regret = torch.cat(batch_simple_regret, dim=0)  #  # (B, T+1)
+        batch_immediate_regret = torch.cat(batch_immediate_regret, dim=0)  # (B, T+1)
+        batch_entropy = torch.cat(batch_entropy, dim=0)  # (B, T)
+        batch_kt_cor = torch.cat(batch_kt_cor, dim=0)  # (B, T)
+        batch_cumulative_time = torch.cat(batch_cumulative_time, dim=0)  # (B, T)
+        batch_inference_regret = torch.cat(batch_inference_regret, dim=0)  # (B, T)
+
+        SIMPLE_REGRET.append(batch_simple_regret)
+        IMMEDIATE_REGRET.append(batch_immediate_regret)
+        ENTROPY.append(batch_entropy)
+        KT_COR.append(batch_kt_cor)
+        CUMULATIVE_TIME.append(batch_cumulative_time)
+        INFERENCE_REGRET.append(batch_inference_regret)
+
+    SIMPLE_REGRET = torch.stack(SIMPLE_REGRET, dim=0)  # (NUM_SEEDS, B, T+1)
+    IMMEDIATE_REGRET = torch.stack(IMMEDIATE_REGRET, dim=0)
+    CUMULATIVE_REGRET = torch.cumsum(IMMEDIATE_REGRET, dim=-1)  # (NUM_SEED, B, T+1)
+    ENTROPY = torch.stack(ENTROPY, dim=0)  # (NUM_SEED, B, T)
+    KT_COR = torch.stack(KT_COR, dim=0)  # (NUM_SEED, B, T)
+    CUMULATIVE_TIME = torch.stack(CUMULATIVE_TIME, dim=0)  # (NUM_SEED, B, T)
+    INFERENCE_REGRET = torch.stack(INFERENCE_REGRET, dim=0)  # (NUM_SEED, B, T)
 
     return {
         "simple_regret": SIMPLE_REGRET,

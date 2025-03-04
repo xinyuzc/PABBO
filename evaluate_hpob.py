@@ -14,13 +14,11 @@ from data.utils import set_all_seeds
 from data.kernel import *
 from data.utils import scale_from_domain_1_to_domain_2
 from data.environment import generate_query_pair_set
+from data.evaluation import *
 from policy_learning import *
-from utils.log import get_logger
 from utils.losses import kendalltau_correlation
 from utils.plot import *
 import logging
-import matplotlib.pyplot as plt
-from types import SimpleNamespace
 
 
 @hydra.main(version_base=None, config_path="configs")
@@ -31,88 +29,133 @@ def main(config: DictConfig):
     torch.set_default_dtype(torch.float32)
     torch.set_default_device(config.experiment.device)
 
-    (
-        SIMPLE_REGRET,
-        IMMEDIATE_REGRET,
-        CUMULATIVE_REGRET,
-        ENTROPY,
-        KT_COR,
-        CUMULATIVE_TIME,
-        INFERENCE_REGRET,
-        fig,
-    ) = evaluate(config)
+    # load trained model
+    model = TransformerModel(**config.model)
+    root = osp.join(
+        hydra.utils.get_original_cwd(),
+        RESULT_PATH,
+        config.experiment.model,
+        config.experiment.expid,
+    )
+    if not osp.exists(root + "/ckpt.tar"):
+        raise ValueError(f"Invalid path {root}.")
+    ckpt = torch.load(
+        os.path.join(root, "ckpt.tar"), map_location=config.experiment.device
+    )
+    model.load_state_dict(ckpt["model"])
+    model.eval()
+
+    res = evaluate(config, model)
+
+    if config.experiment.override:
+        save_dir = osp.join(
+            hydra.utils.get_original_cwd(),
+            RESULT_PATH,
+            "evaluation",
+            config.data.name,
+            config.experiment.model,
+            config.experiment.expid,
+        )
+
+        if not osp.exists(save_dir):
+            os.makedirs(save_dir, exist_ok=True)
+
+        print(f"Saving results in f{str(save_dir)}...")
+        torch.save(
+            res["simple_regret"],
+            f"{save_dir}/SIMPLE_REGRET.pt",
+        )
+        torch.save(
+            res["immediate_regret"],
+            f"{save_dir}/IMMEDIATE_REGRET.pt",
+        )
+        torch.save(
+            res["cumulative_regret"],
+            f"{save_dir}/CUMULATIVE_REGRET.pt",
+        )
+        torch.save(res["entropy"], f"{save_dir}/ENTROPY.pt")
+        torch.save(res["kt_cor"], f"{save_dir}/KT_COR.pt")
+        torch.save(
+            res["cumulative_time"],
+            f"{save_dir}/CUMULATIVE_TIME.pt",
+        )
+        torch.save(
+            res["inference_regret"],
+            f"{save_dir}/INFERENCE_REGRET.pt",
+        )
 
     # log to W&B
     if config.experiment.wandb:
-        srml = wandb.plot.line_series(
-            xs=[*range(SIMPLE_REGRET.shape[-1])],  # (H)
-            ys=SIMPLE_REGRET,  # (num_seed, H)
-            keys=[f"seed_{i}" for i in range(SIMPLE_REGRET.shape[-1])],
-            title="Simple Regret",
-            xname="Steps",
+        wandb.log(
+            {
+                f"simple_regret_vs_step_plot": wandb.plot.line_series(
+                    xs=[
+                        *range(res["simple_regret"].shape[-1])
+                    ],  # list of x values: steps
+                    ys=[
+                        res["simple_regret"].mean(dim=1)[i]
+                        for i in range(res["simple_regret"].shape[0])
+                    ],  # list of y values: simple regret for each seed
+                    keys=[
+                        f"seed {i}" for i in range(res["simple_regret"].shape[0])
+                    ],  # line labels: seed
+                    title=f"Simple Regret vs Step Plot",
+                    xname="Step",
+                ),
+                f"immediate_regret_vs_step_plot": wandb.plot.line_series(
+                    xs=[
+                        *range(res["immediate_regret"].shape[-1])
+                    ],  # list of x values: steps
+                    ys=[
+                        res["immediate_regret"].mean(dim=1)[i]
+                        for i in range(res["immediate_regret"].shape[0])
+                    ],  # list of y values: immediate regret for each seed
+                    keys=[
+                        f"seed {i}" for i in range(res["immediate_regret"].shape[0])
+                    ],  # line labels: seed
+                    title=f"Immediate Regret vs Step Plot",
+                    xname="Step",
+                ),
+                f"entropy_vs_step_plot": wandb.plot.line_series(
+                    xs=[*range(res["entropy"].shape[-1])],  # list of x values: steps
+                    ys=[
+                        res["entropy"].mean(dim=1)[i]
+                        for i in range(res["entropy"].shape[0])
+                    ],  # list of y values: simple regret for each seed
+                    keys=[
+                        f"seed {i}" for i in range(res["entropy"].shape[0])
+                    ],  # line labels: seed
+                    title=f"Entropy vs Step Plot",
+                    xname="Step",
+                ),
+                f"inference_regret_vs_step_plot": wandb.plot.line_series(
+                    xs=[
+                        *range(res["inference_regret"].shape[-1])
+                    ],  # list of x values: steps
+                    ys=[
+                        res["inference_regret"].mean(dim=1)[i]
+                        for i in range(res["inference_regret"].shape[0])
+                    ],  # list of y values: simple regret for each seed
+                    keys=[
+                        f"seed {i}" for i in range(res["inference_regret"].shape[0])
+                    ],  # line labels: seed
+                    title=f"Inference Regret vs Step Plot",
+                    xname="Step",
+                ),
+                f"kt_cor_vs_step_plot": wandb.plot.line_series(
+                    xs=[*range(res["kt_cor"].shape[-1])],  # list of x values: steps
+                    ys=[
+                        res["kt_cor"].mean(dim=1)[i]
+                        for i in range(res["kt_cor"].shape[0])
+                    ],  # list of y values: simple regret for each seed
+                    keys=[
+                        f"seed {i}" for i in range(res["kt_cor"].shape[0])
+                    ],  # line labels: seed
+                    title=f"Kendall-tau Correlation vs Step Plot",
+                    xname="Step",
+                ),
+            }
         )
-        imrml = wandb.plot.line_series(
-            xs=[*range(IMMEDIATE_REGRET.shape[-1])],  # (H)
-            ys=IMMEDIATE_REGRET,  # (num_seed, H)
-            keys=[f"seed_{i}" for i in range(IMMEDIATE_REGRET.shape[-1])],
-            title="Immediate Regret",
-            xname="Steps",
-        )
-        crml = wandb.plot.line_series(
-            xs=[*range(CUMULATIVE_REGRET.shape[-1])],  # (H)
-            ys=CUMULATIVE_REGRET,  # (num_seed, H)
-            keys=[f"seed_{i}" for i in range(CUMULATIVE_REGRET.shape[-1])],
-            title="Cumulative Regret",
-            xname="Steps",
-        )
-        eml = wandb.plot.line_series(
-            xs=[*range(ENTROPY.shape[-1])],  # (H)
-            ys=ENTROPY,  # (num_seed, H)
-            keys=[f"seed_{i}" for i in range(ENTROPY.shape[-1])],
-            title="Entropy",
-            xname="Steps",
-        )
-        ktcml = wandb.plot.line_series(
-            xs=[*range(KT_COR.shape[-1])],  # (H)
-            ys=KT_COR,  # (num_seed, H)
-            keys=[f"seed_{i}" for i in range(KT_COR.shape[-1])],
-            title="Kendall-tau Correlation",
-            xname="Steps",
-        )
-        ctml = wandb.plot.line_series(
-            xs=[*range(CUMULATIVE_TIME.shape[-1])],  # (H)
-            ys=CUMULATIVE_TIME,  # (num_seed, H)
-            keys=[f"seed_{i}" for i in range(CUMULATIVE_TIME.shape[-1])],
-            title="Cumulative Inference Time",
-            xname="Steps",
-        )
-        irml = wandb.plot.line_series(
-            xs=[*range(INFERENCE_REGRET.shape[-1])],  # (H)
-            ys=INFERENCE_REGRET,  # (num_seed, H)
-            keys=[f"seed_{i}" for i in range(INFERENCE_REGRET.shape[-1])],
-            title="Inference Regret",
-            xname="Steps",
-        )
-
-        log_ctx = {
-            "simple_regret_plot": srml,
-            "immediate_regret_plot": imrml,
-            "cumulative_regret_plot": crml,
-            "cumulative_inference_time_plot": ctml,
-            "inference_regret_plot": irml,
-            "entropy_plot": eml,
-            "kendall-tau correlation plot": ktcml,
-        }
-
-        if fig is not None:
-            handles, labels = fig.axes[0].get_legend_handles_labels()
-            fig.legend(handles, labels, ncol=len(labels), loc="lower center")
-            fig.suptitle(
-                f"[T={config.eval.eval_max_T}], r=({SIMPLE_REGRET[:, -1].mean().item(): .2f}, {SIMPLE_REGRET[:, -1].std().item(): .2f}), ri=({INFERENCE_REGRET[:, -1].mean().item(): .2f}, {INFERENCE_REGRET[:, -1].std().item(): .2f})"
-            )
-            log_ctx["optimization_trajectory_plot"] = wandb.Image(fig)
-
-        wandb.log(log_ctx)
 
 
 def evalate_on_a_dataset(
@@ -130,8 +173,6 @@ def evalate_on_a_dataset(
     p_noise: float,
     eval_max_T: int,
     argmax: bool,
-    logger: Union[logging.Logger, None] = None,
-    plot_freq: float = -1,
 ):
     """Evaluate PABBO on one HPOB test dataset with specified random seed.
 
@@ -150,7 +191,6 @@ def evalate_on_a_dataset(
         p_noise, float: the observed noise when giving preference.
         eval_max_T, int: time budget.
         argmax, bool: whether to propose the query with the largest predicted acq_value or sample from the entire policy.
-        plot_freq, int: the frequency of visualizing the trajectory on funcition.
 
     Returns:
         dataset_simple_regret, (1, T+1): yopt - max_{i=1}^t max {y_{i,1}, y_{i,2}}
@@ -164,40 +204,31 @@ def evalate_on_a_dataset(
     set_all_seeds(seed)
 
     # visualize the trajectory on 1- or 2-d function
-    if plot_freq > 0:
-        num_axes = eval_max_T // plot_freq + 1
-        nrows = max(int(math.ceil(num_axes / 3)), 1)
-        ncols = min(3, num_axes)
-        fig = plt.figure(figsize=(5 * ncols, 5 * nrows))
-    else:
-        fig = None
-
     d_x = Xopt.shape[-1]
 
     # load initial data and test dataset; add batch dim
-    context_pairs = initial_pairs.reshape(1, -1, 2 * d_x)
-    context_pairs_y = initial_pairs_y.reshape(1, -1, 2)
-    context_c = initial_c.reshape(1, -1, 2)
-    num_query_points = len(X_pending)
+    context_pairs_y = initial_pairs_y[None, :, :]
+    context_c = initial_c[None, :, :]
+    context_pairs = scale_from_domain_1_to_domain_2(
+        x=initial_pairs.view(-1, d_x),
+        bound1=test_x_range,
+        bound2=train_x_range,
+    ).view(-1, 2 * d_x)[None, :, :]
 
-    X_pending = X_pending.reshape(1, -1, d_x)
-    y_pending = y_pending.reshape(1, -1, 1)
-    if logger is not None:
-        logger.info(f"Original initial pairs: \n {context_pairs}")
+    num_query_points = len(X_pending)
+    X_pending = X_pending[None, :, :]
+    y_pending = y_pending[None, :, :]
 
     # NOTE scale the input range of test samples into the range where PABBO was trained
     X_pending = scale_from_domain_1_to_domain_2(
         x=X_pending,
         bound1=test_x_range,
-        bound1=train_x_range,
+        bound2=train_x_range,
     )
-    if logger is not None:
-        logger.info(f"Original Xopt: \n {Xopt}")
-
     Xopt = scale_from_domain_1_to_domain_2(
         Xopt,
         bound1=test_x_range,
-        bound1=train_x_range,
+        bound2=train_x_range,
     )
     query_pair_idx, query_pair, query_pair_y, query_c = generate_query_pair_set(
         X=X_pending,
@@ -205,16 +236,9 @@ def evalate_on_a_dataset(
         num_total_points=num_query_points,
         p_noise=p_noise,
     )
-    mask = (
-        torch.ones((query_pair.shape[0], query_pair.shape[1], 1)).bool().to(Xopt)
-    )  # (1, num_query_pairs, 1), mask to register queried pairs
-
-    # NOTE scale the test input into the range where PABBO was trained
-    context_pairs = scale_from_domain_1_to_domain_2(
-        x=context_pairs.view(1, -1, d_x),
-        bound1=test_x_range,
-        bound2=train_x_range,
-    ).view(1, -1, 2 * d_x)
+    mask = torch.ones(
+        (query_pair.shape[0], query_pair.shape[1], 1)
+    ).bool()  # (1, num_query_pairs, 1)
 
     # record metrics along the trajectory, [(1)]
     dataset_simple_regret = [
@@ -230,7 +254,7 @@ def evalate_on_a_dataset(
 
     with torch.no_grad():
         # sequentially propose T queries
-        for t in range(1, eval_max_T):
+        for t in range(1, eval_max_T + 1):
             # evaluate kt-cor on the query set at each step
             pred_f = model(
                 query_src=context_pairs,
@@ -284,13 +308,14 @@ def evalate_on_a_dataset(
                 - torch.max(context_pairs_y.flatten(start_dim=1), dim=-1).values,
             )  # (1)
             dataset_immediate_regret.append(
-                val=yopt[0].view(1) - context_pairs_y[:, -1].max(dim=-1).values,
+                yopt[0].view(1) - context_pairs_y[:, -1].max(dim=-1).values,
             )  # (1)
             dataset_entropy.append(entropy)
-            inference_opt_idx = torch.max(acq_values, dim=1).indices[:, None, :]
-            infer_opt_pair = gather_data_at_index(
-                data=query_pair, idx=inference_opt_idx
-            )
+            inference_opt_idx = torch.max(
+                acq_values.flatten(start_dim=1), dim=-1
+            ).indices[
+                :, None, None
+            ]  # (B, 1, 1)
             infer_opt_pair_y = gather_data_at_index(
                 data=query_pair_y, idx=inference_opt_idx
             )
@@ -301,59 +326,25 @@ def evalate_on_a_dataset(
                     dim=-1,
                 ).values
             )  # (1)
-            if plot_freq > 0 and (t % plot_freq == 0):
-                # TODO plot
-                if d_x == 1:
-                    ax = fig.add_subplot(nrows, ncols, t // plot_freq + 1)
-                    # TODO scale input range to test range
-                    plot_prediction_on_1d_function(
-                        X=scale_from_domain_1_to_domain_2(
-                            x=X_pending[0].clone(),
-                            bound1=test_x_range,
-                            bound2=train_x_range,
-                        ),
-                        y_pred=pred_f[0].clone(),
-                        y=y_pending[0].clone(),
-                        Xopt=scale_from_domain_1_to_domain_2(
-                            x=Xopt.clone(), bound1=test_x_range, bound2=train_x_range
-                        ),
-                        yopt=yopt.clone(),
-                        x_range=test_x_range,
-                        query_pair=scale_from_domain_1_to_domain_2(
-                            x=context_pairs[0].clone().reshape(-1, d_x),
-                            bound1=test_x_range,
-                            bound2=train_x_range,
-                        ),
-                        query_pair_y=context_pairs_y[0].clone(),
-                        infer_opt_pair=scale_from_domain_1_to_domain_2(
-                            x=infer_opt_pair[0].clone().reshape(-1, d_x),
-                            bound1=test_x_range,
-                            bound2=train_x_range,
-                        ),
-                        infer_opt_pair_y=infer_opt_pair_y[0].clone(),
-                        utility_function=None,
-                        ax=ax,
-                    )
-                elif d_x == 2:
-                    raise NotImplementedError
-                else:
-                    raise NotImplementedError(
-                        "Visualization for data with more than 2 dimensions is not supported."
-                    )
-        return (
-            torch.stack(dataset_simple_regret, dim=-1),
-            torch.stack(dataset_immediate_regret, dim=-1),
-            torch.from_numpy(np.cumsum(dataset_cumulative_time))
-            .reshape(1, -1)
-            .to(Xopt),  # cumulative time
-            torch.stack(dataset_entropy, dim=-1),
-            torch.stack(dataset_kt_cor, dim=-1),
-            torch.stack(dataset_inference_regret, dim=-1),
-            fig,
-        )
+
+    dataset_cumulative_time = (
+        torch.from_numpy(np.cumsum(dataset_cumulative_time)).reshape(1, -1).to(Xopt)
+    )
+    print(
+        f"final simple regret: {dataset_simple_regret[-1].item(): .5f}, final inference regret: {dataset_inference_regret[-1].item(): .5f}, final kt-cor: {dataset_kt_cor[-1].item(): .5f}"
+    )
+
+    return {
+        "simple_regret": torch.stack(dataset_simple_regret, dim=-1),
+        "immediate_regret": torch.stack(dataset_immediate_regret, dim=-1),
+        "inference_regret": torch.stack(dataset_inference_regret, dim=-1),
+        "cumulative_time": dataset_cumulative_time,
+        "entropy": torch.stack(dataset_entropy, dim=-1),
+        "kt_cor": torch.from_numpy(np.stack(dataset_kt_cor)).reshape(1, -1).to(Xopt),
+    }
 
 
-def evaluate(config: DictConfig):
+def evaluate(config: DictConfig, model: TransformerModel):
     """Evaluate PABBO on HPOB benchmark.
 
     Returns:
@@ -365,68 +356,45 @@ def evaluate(config: DictConfig):
         CUMULATIVE_TIME, (num_seed, T)
         INFERENCE_REGRET, (num_seed, T)
     """
-    device = torch.device(config.experiment.device)
-
-    # load model from saved checkpoint
-    model = TransformerModel(**config.model)
-    root = osp.join(
-        hydra.utils.get_original_cwd(),
-        RESULT_PATH,
-        config.experiment.model,
-        config.experiment.expid,
+    datapath = get_evaluation_datapath(
+        root=osp.join(hydra.utils.get_original_cwd(), DATASETS_PATH),
+        dataname=config.data.name,
     )
-    if not osp.exists(root + "/ckpt.tar"):
-        raise ValueError(f"Invalid path {root}.")
-    ckpt = torch.load(
-        os.path.join(root, "ckpt.tar"), map_location=config.experiment.device
-    )
-    model.load_state_dict(ckpt["model"])
-    model.eval()
-
-    # logger
-    logfilename = os.path.join(
-        f'evaluate_{config.experiment.expid}_{time.strftime("%Y%m%d_%H%M%S")}.log',
-    )
-    logger = get_logger(file_name=logfilename, mode="w")
-
-    # load preferential black-box optimization (PBBO) task for evaluation
-    logger.info(
-        f"Loading PBBO evaluation task for {config.data.name}: initial data, utility and optimum information..."
-    )
-    root = osp.join(hydra.utils.get_original_cwd(), DATASETS_PATH)
-    if not osp.exists(root + f"{config.data.name}_initial_pairs.pt"):
-        # create
-        raise NotImplementedError
+    if not osp.exists(datapath):
+        print(f"Generating PBBO evaluation task for {config.data.name}...")
+        eval_task = generate_hpob_evaluation_task(
+            num_seeds=config.eval.num_seeds,
+            train_x_i_range=config.train.x_i_range,
+            test_x_range=config.data.x_range,
+            search_space_id=str(config.data.search_space_id),
+            standardize=config.data.standardize,
+            num_initial_pairs=config.eval.num_initial_pairs,
+            p_noise=config.eval.p_noise,
+            device=config.experiment.device,
+        )
+        torch.save(eval_task, datapath)
+        print(
+            f"Generated PBBO evaluation task for {config.data.name} is saved under {str(datapath)}."
+        )
     else:
+        print(
+            f"Loading PBBO evaluation task for {config.data.name} from {str(datapath)}..."
+        )
         eval_task = torch.load(
-            osp.join(
-                hydra.utils.get_original_cwd(),
-                DATASETS_PATH,
-                f"{config.data.name}_initial_pairs.pt",
-            ),
+            datapath,
             map_location=config.experiment.device,
         )
-
-    # load HPOB test data
-    logger.info(f"Loading test data for {config.data.name}...")
-    test_data_filename = f"{config.data.name}.pt"
-    test_datapath = osp.join(root, test_data_filename)
-    if not osp.exists(test_datapath):
-        raise FileExistsError(test_datapath)
-        # TODO generate test data
-
-    else:
-        test_data = torch.load(test_datapath, map_location=config.experiment.device)
-    test_data = SimpleNamespace(**test_data)
+    TEST_X_RANGE = torch.tensor(eval_task["test_x_range"])
+    TRAIN_X_RANGE = torch.tensor(eval_task["train_x_range"])
 
     NUM_SEEDS = eval_task["num_seeds"]
     B = eval_task["num_datasets"]
-    TEST_X_RANGE = torch.tensor(eval_task["test_x_range"]).to(device)
-    TRAIN_X_RANGE = torch.tensor(eval_task["train_x_range"]).to(device)
-    SAMPLER_KWARGS = eval_task["sampler_kwargs"]
-    FUNCTION_KWARGS = eval_task["function_kwargs"]
-    XOPT = eval_task["Xopt"].to(device)
-    YOPT = eval_task["yopt"].to(device)  # (B, num_global_optima, 1)
+    X = eval_task["X"].to(device=config.experiment.device, dtype=torch.float32)
+    y = eval_task["y"].to(device=config.experiment.device, dtype=torch.float32)
+    XOPT = eval_task["Xopt"].to(device=config.experiment.device, dtype=torch.float32)
+    YOPT = eval_task["yopt"].to(
+        device=config.experiment.device, dtype=torch.float32
+    )  # (B, num_global_optima, 1)
 
     # record metrics averaged over all batches for each random seed, (num_seeds, T)
     SIMPLE_REGRET = list()
@@ -438,7 +406,7 @@ def evaluate(config: DictConfig):
 
     # evaluate with each seed
     for seed in range(NUM_SEEDS):
-        logger.info(f"Loading initialization with random seed {seed}...")
+        print(f"Loading initialization with random seed {seed}...")
         initialization = eval_task["initialization"][f"{seed}"]
 
         # record metrics averaged over all batches, [(1, T)]
@@ -450,90 +418,69 @@ def evaluate(config: DictConfig):
         batch_inference_regret = list()
 
         # evaluate on each dataset
-        for b in tqdm(range(B), f"Evaluating on {B} GP samples..."):
+        for b in tqdm(range(B), f"Evaluating on {B} datasets..."):
             # evaluate on each dataset
-            (
-                dataset_simple_regret,
-                dataset_immediate_regret,
-                dataset_entropy,
-                dataset_kt_cor,
-                dataset_cumulative_time,
-                dataset_inference_regret,
-                fig,
-            ) = evalate_on_a_dataset(
+            dataset_metrics = evalate_on_a_dataset(
                 model=model,
                 seed=seed,
                 Xopt=XOPT[b],
                 yopt=YOPT[b],
-                X_pending=test_data.X[b],
-                y_pending=test_data.y[b],
+                X_pending=X[b],
+                y_pending=y[b],
                 test_x_range=TEST_X_RANGE,
                 train_x_range=TRAIN_X_RANGE,
-                initial_pairs=initialization["initial_pairs"][b],
-                initial_pairs_y=initialization["initial_pairs_y"][b],
-                initial_c=initialization["initial_c"][b],
-                eval_num_query_points=config.eval.eval_num_query_points,
+                initial_pairs=initialization["initial_pairs"][b].to(
+                    device=config.experiment.device, dtype=torch.float32
+                ),
+                initial_pairs_y=initialization["initial_pairs_y"][b].to(
+                    device=config.experiment.device, dtype=torch.float32
+                ),
+                initial_c=initialization["initial_c"][b].to(
+                    device=config.experiment.device, dtype=torch.float32
+                ),
                 p_noise=config.eval.p_noise,
                 eval_max_T=config.eval.eval_max_T,
                 argmax=config.eval.argmax,
-                logger=logger,
-                plot_freq=config.eval.plot_freq,
             )
             # record metrics averaged over datasets
-            batch_simple_regret.append(dataset_simple_regret)
-            batch_immediate_regret.append(dataset_immediate_regret)
-            batch_cumulative_time.append(dataset_cumulative_time)
-            batch_entropy.append(dataset_entropy)
-            batch_kt_cor.append(dataset_kt_cor)
-            batch_inference_regret.append(dataset_inference_regret)
+            batch_simple_regret.append(dataset_metrics["simple_regret"])
+            batch_immediate_regret.append(dataset_metrics["immediate_regret"])
+            batch_inference_regret.append(dataset_metrics["inference_regret"])
+            batch_cumulative_time.append(dataset_metrics["cumulative_time"])
+            batch_entropy.append(dataset_metrics["entropy"])
+            batch_kt_cor.append(dataset_metrics["kt_cor"])
 
-        SIMPLE_REGRET.append(torch.cat(batch_simple_regret, dim=0).mean(dim=0))  # (T)
-        IMMEDIATE_REGRET.append(torch.cat(batch_immediate_regret, dim=0).mean(dim=0))
-        ENTROPY.append(torch.cat(batch_entropy, dim=0).mean(dim=0))
-        KT_COR.append(torch.cat(batch_kt_cor, dim=0).mean(dim=0))
-        CUMULATIVE_TIME.append(torch.cat(batch_cumulative_time, dim=0).mean(dim=0))
-        INFERENCE_REGRET.append(torch.cat(batch_inference_regret, dim=0).mean(dim=0))
+        batch_simple_regret = torch.cat(batch_simple_regret, dim=0)  #  # (B, T+1)
+        batch_immediate_regret = torch.cat(batch_immediate_regret, dim=0)  # (B, T+1)
+        batch_entropy = torch.cat(batch_entropy, dim=0)  # (B, T)
+        batch_kt_cor = torch.cat(batch_kt_cor, dim=0)  # (B, T)
+        batch_cumulative_time = torch.cat(batch_cumulative_time, dim=0)  # (B, T)
+        batch_inference_regret = torch.cat(batch_inference_regret, dim=0)  # (B, T)
 
-    SIMPLE_REGRET = torch.stack(SIMPLE_REGRET, dim=0).cpu().numpy()
-    IMMEDIATE_REGRET = torch.stack(IMMEDIATE_REGRET, dim=0).cpu().numpy()
-    CUMULATIVE_REGRET = np.cumsum(IMMEDIATE_REGRET, axis=-1)
-    ENTROPY = torch.stack(ENTROPY, dim=0).cpu().numpy()
-    KT_COR = torch.stack(KT_COR, dim=0).cpu().numpy()
-    CUMULATIVE_TIME = torch.stack(CUMULATIVE_TIME, dim=0).cpu().numpy()
-    INFERENCE_REGRET = torch.stack(INFERENCE_REGRET, dim=0).cpu().numpy()
+        SIMPLE_REGRET.append(batch_simple_regret)
+        IMMEDIATE_REGRET.append(batch_immediate_regret)
+        ENTROPY.append(batch_entropy)
+        KT_COR.append(batch_kt_cor)
+        CUMULATIVE_TIME.append(batch_cumulative_time)
+        INFERENCE_REGRET.append(batch_inference_regret)
 
-    # save results
-    if config.experiment.override:
-        save_dir = osp.join(
-            hydra.utils.get_original_cwd(),
-            RESULT_PATH,
-            "evaluation",
-            config.data.name,
-            config.experiment.model,
-            config.experiment.expid,
-        )
+    SIMPLE_REGRET = torch.stack(SIMPLE_REGRET, dim=0)  # (NUM_SEEDS, B, T+1)
+    IMMEDIATE_REGRET = torch.stack(IMMEDIATE_REGRET, dim=0)
+    CUMULATIVE_REGRET = torch.cumsum(IMMEDIATE_REGRET, dim=-1)  # (NUM_SEED, B, T+1)
+    ENTROPY = torch.stack(ENTROPY, dim=0)  # (NUM_SEED, B, T)
+    KT_COR = torch.stack(KT_COR, dim=0)  # (NUM_SEED, B, T)
+    CUMULATIVE_TIME = torch.stack(CUMULATIVE_TIME, dim=0)  # (NUM_SEED, B, T)
+    INFERENCE_REGRET = torch.stack(INFERENCE_REGRET, dim=0)  # (NUM_SEED, B, T)
 
-        if not osp.exists(save_dir):
-            os.makedirs(save_dir, exist_ok=True)
-
-        torch.save(SIMPLE_REGRET, f"{save_dir}/SIMPLE_REGRET.pt")
-        torch.save(IMMEDIATE_REGRET, f"{save_dir}/IMMEDIATE_REGRET.pt")
-        torch.save(CUMULATIVE_REGRET, f"{save_dir}/CUMULATIVE_REGRET.pt")
-        torch.save(ENTROPY, f"{save_dir}/ENTROPY.pt")
-        torch.save(KT_COR, f"{save_dir}/KT_COR.pt")
-        torch.save(CUMULATIVE_TIME, f"{save_dir}/CUMULATIVE_TIME.pt")
-        torch.save(INFERENCE_REGRET, f"{save_dir}/INFERENCE_REGRET.pt")
-
-    return (
-        SIMPLE_REGRET,
-        IMMEDIATE_REGRET,
-        CUMULATIVE_REGRET,
-        ENTROPY,
-        KT_COR,
-        CUMULATIVE_TIME,
-        INFERENCE_REGRET,
-        fig,
-    )
+    return {
+        "simple_regret": SIMPLE_REGRET,
+        "immediate_regret": IMMEDIATE_REGRET,
+        "cumulative_regret": CUMULATIVE_REGRET,
+        "inference_regret": INFERENCE_REGRET,
+        "entropy": ENTROPY,
+        "kt_cor": KT_COR,
+        "cumulative_time": CUMULATIVE_TIME,
+    }
 
 
 if __name__ == "__main__":

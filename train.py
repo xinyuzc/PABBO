@@ -8,7 +8,7 @@ import wandb
 from omegaconf import DictConfig
 import hydra
 from wandb_wrapper import init as wandb_init, save_artifact
-from policies.policy import TransformerModel
+from policies.transformer import TransformerModel
 from data.sampler import OptimizationSampler
 from data.environment import generate_query_pair_set, sample_random_pairs_from_Q
 from data.utils import *
@@ -118,7 +118,7 @@ def train(config: DictConfig, model: TransformerModel):
         # create datasets
         if epoch <= config.train.n_burnin:
             # burnin: only sample prediction dataset
-            X_pred, y_pred, _, _ = sampler.sample(
+            X_pred, y_pred, _, _, _ = sampler.sample(
                 batch_size=B,
                 max_num_ctx_points=max_num_ctx,
                 num_total_points=num_prediction_points,
@@ -128,7 +128,7 @@ def train(config: DictConfig, model: TransformerModel):
             )
         else:
             # sample points for prediction and query dataset
-            X, y, Xopt, yopt = sampler.sample(
+            X, y, Xopt, yopt, _ = sampler.sample(
                 batch_size=B,
                 max_num_ctx_points=max_num_ctx,
                 num_total_points=num_prediction_points + num_query_points,
@@ -180,6 +180,9 @@ def train(config: DictConfig, model: TransformerModel):
             log_probs = []
             rewards = []
 
+            del X
+            del y
+
         _, src_pairs, src_pairs_y, src_c = generate_query_pair_set(
             X=X_pred,
             y=y_pred,
@@ -188,7 +191,10 @@ def train(config: DictConfig, model: TransformerModel):
             p_noise=config.train.p_noise,
         )  # prediction set
 
-        # TODO remove X, y from cuda
+        del X_pred
+        del y_pred
+
+        torch.cuda.empty_cache()
 
         cls_losses = 0.0
 
@@ -362,8 +368,8 @@ def train(config: DictConfig, model: TransformerModel):
                 "step": epoch + 1,
             }
 
-            # save to the experiment directory
-            torch.save(ckpt, "ckpt.tar")
+            # # save to the experiment directory
+            # torch.save(ckpt, "ckpt.tar")
 
             # save to the result saving path
             torch.save(ckpt, os.path.join(root, f"ckpt.tar"))
@@ -372,7 +378,7 @@ def train(config: DictConfig, model: TransformerModel):
             if config.experiment.wandb:
                 save_artifact(
                     run=wandb.run,
-                    local_path="ckpt.tar",
+                    local_path=os.path.join(root, f"ckpt.tar"),
                     name="checkpoint",
                     type="model",
                 )

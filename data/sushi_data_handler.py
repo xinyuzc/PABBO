@@ -6,20 +6,23 @@ from data.utils import (
 )
 import os.path as osp
 from typing import List, Tuple
+from sklearn.preprocessing import MinMaxScaler
 
 
 class SushiDataHandler:
-    def __init__(self, root_dir: str = "datasets/sushi-data"):
+    def __init__(
+        self, root_dir: str = "datasets/sushi-data", interpolator_type: str = "linear"
+    ):
         """Data handler for sushi dataset.
 
         Attrs:
-            num_total_points, scalar: the number of objects.
-            d_x, scalar: number of features.
-            raw_X, np.ndarray[num_total_points, 2]: candy object containing two features.
-            scaled_X, np.ndarray[num_total_points, 2]: standardized candy object.
-            raw_y, np.ndarray[num_total_points, 1]: associated utility values.
-            std_y, np.ndarray[num_total_points, 1] standardized utility values.
-            x_range, list of two elements: input range.
+            num_total_points, scalar: number of samples.
+            d_x, scalar: input dimension.
+            raw_X, np.ndarray[num_total_points, 2]: two continuous input features `sugarpercent` and `pricepercent`.
+            X, np.ndarray[num_total_points, 2]: min-max scaled input features.
+            raw_y, np.ndarray[num_total_points, 1]: associated utility values, `winpercent`.
+            y, np.ndarray[num_total_points, 1] min-max scaled utility values.
+            x_range, list: data range of each feature.
         """
         self.root_dir = root_dir
         df_features = pd.read_csv(
@@ -28,7 +31,8 @@ class SushiDataHandler:
         df_score = pd.read_csv(
             osp.join(root_dir, "sushi3b.5000.10.score"), sep=" ", header=None
         )
-        # Generate scrores from preferences
+
+        # generate utility values f = win_count / total
         scores = []
         for item_a in range(df_score.values.shape[1]):
             score = 0
@@ -37,18 +41,18 @@ class SushiDataHandler:
                     score += 1
             scores.append(score / float(df_score.values.shape[1]))
 
+        self.x_range = [0, 1]
         self.raw_X = df_features.values[:, [6, 5, 7, 8][:4]].astype(np.float64)
-        self.num_total_points = len(self.raw_X)
-        self.d_x = self.raw_X.shape[-1]
-        self.scaled_X = (self.raw_X - np.min(self.raw_X, axis=0)[None, :]) / (
+        self.X = (self.raw_X - np.min(self.raw_X, axis=0)[None, :]) / (
             np.max(self.raw_X, axis=0) - np.min(self.raw_X, axis=0)
         )[None, :]
-        self.x_range = [0, 1]
 
         self.raw_y = np.array(scores).reshape((-1, 1))
-        self.std_y = (self.raw_y - np.min(self.raw_y)) / (
+        self.y = (self.raw_y - np.min(self.raw_y)) / (
             np.max(self.raw_y) - np.min(self.raw_y)
         )
+        self.interpolator_type = interpolator_type
+        self.fit(interpolator_type=interpolator_type)
 
     def _prefer_a(self, item_a: int, item_b: int, df_scores: List):
         """
@@ -66,54 +70,77 @@ class SushiDataHandler:
         prefer_b = np.mean(df_scores[item_b].values[ix] > df_scores[item_a].values[ix])
         return prefer_a > prefer_b
 
-    def get_data(self, add_batch_dim: bool = False):
-        """Load sushi dataset.
+    def fit(
+        self,
+        interpolator_type: str = "linear",
+    ) -> Tuple[MyNDInterpolator, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Fit an extrapolator on the discrete sushi dataset.
+
+        Args:
+            interpolator_type, str in ["linear", "nearest"]: the out-of-bound values will be filled with its nearest neighbor's value when using linear interpolator.
+        """
+        self.yopt = np.max(self.y, axis=0, keepdims=True)  # (1, 1)
+        self.Xopt = np.take_along_axis(
+            self.X, np.argmax(self.y, axis=0, keepdims=True), axis=0
+        )
+        self.utility = MyNDInterpolator(
+            X=self.X, y=self.y, interpolator_type=interpolator_type
+        )
+
+    def get_utility(self):
+        """Get fitted extrapolator."""
+        return self.utility
+
+    def get_data(
+        self, add_batch_dim: bool = False
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Get sushi dataset.
 
         Args:
             add_batch_dim, bool: whether to add batch dimension.
 
         Returns:
-            X, (1, num_total_points, 2) if add_batch_dim else (num_total_points, 2)
-            y, (1, num_total_points, 1) if add_batch_dim else (num_total_points, 1)
-            Xopt, (1, 1, 2) if add_batch_dim else (1, 2)
-            yopt, (1, 1, 1) if add_batch_dim else (1, 1)
-
+            X, (1, num_total_points, 4) if add_batch_dim else (num_total_points, 4): datapoints.
+            y, (1, num_total_points, 1) if add_batch_dim else (num_total_points, 1): associated utility values.
+            Xopt, (1, 1, 4) if add_batch_dim else (1, 4): global optimum locations.
+            yopt, (1, 1, 1) if add_batch_dim else (1, 1): global optimum.
         """
-        X = self.scaled_X
-        y = self.std_y
-        yopt = np.max(y, axis=0, keepdims=True)
-        Xopt = np.take_along_axis(X, np.argmax(y, axis=0, keepdims=True), axis=0)
         if add_batch_dim:
-            X, y, Xopt, yopt = (
-                X[None, :, :],
-                y[None, :, :],
-                Xopt[None, :, :],
-                yopt[None, :, :],
+            return (
+                self.X[None, :, :],
+                self.y[None, :, :],
+                self.Xopt[None, :, :],
+                self.yopt[None, :, :],
             )
-        return X, y, Xopt, yopt
+        else:
+            return self.X, self.y, self.Xopt, self.yopt
 
-    def linear_extrapolation(
+    def sample(
         self,
-        interpolator_type: str = "linear",
-    ) -> Tuple[MyNDInterpolator, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Generalize the sushi dataset to continous space with linear extrapolation.
+        batch_size: int = 1,
+        num_points: int = 200,
+    ):
+        """Sample the fitted extrapolator.
 
         Args:
-            interpolator_type, str in ["linear", "nearest"]
+            batch_size, scalar: batch size.
+            num_points, scalar: number of datapoints in each sampled dataset.
 
         Returns:
-            utility: utility function through linear extrapolation on the candy dataset
-            Xopt, (1, 1, 2)
-            yopt, (1, 1, 1)
-            X, (1, num_total_points, 2)
-            y, (1, num_total_points, 1)
+            XX, (batch_size, num_points, 4): sampled points.
+            YY, (batch_size, num_points, 1): associated utility values.
+            Xopt, (batch_size, 1, 4): global optimum location.
+            yopt, (batch_size, 1, 1): global optimum.
         """
-        X, y, Xopt, yopt = self.get_data(add_batch_dim=False)
-        self.utility = MyNDInterpolator(X=X, y=y, interpolator_type=interpolator_type)
-        X, y, Xopt, yopt = (
-            X[None, :, :],
-            y[None, :, :],
-            Xopt[None, :, :],
-            yopt[None, :, :],
+        XX = (
+            np.random.random((batch_size, num_points, 4))
+            * (self.x_range[1] - self.x_range[0])
+            + self.x_range[0]
         )
-        return self.utility, Xopt, yopt, X, y
+        YY = self.utility(XX)
+        return (
+            XX,
+            YY,
+            np.tile(self.Xopt, (batch_size, 1, 1)),
+            np.tile(self.yopt, (batch_size, 1, 1)),
+        )

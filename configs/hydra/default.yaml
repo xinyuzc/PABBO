@@ -1,6 +1,6 @@
-run:
-  # output directory for normal runs 
-  dir: ./outputs/${now:%Y%m%d_%H%M%S}
+output_subdir: null  
+run:  
+  dir: .
 sweep:
   # output directory for sweep runs
   dir: ./outputs/${now:%Y%m%d_%H%M%S}

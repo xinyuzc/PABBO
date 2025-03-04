@@ -3,6 +3,7 @@ import numpy as np
 from typing import Union, Callable, List
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 
 
 def confidence_interval(value: np.ndarray):
@@ -413,7 +414,7 @@ def plot_prediction_on_2d_function(
         **planes,
         ax=ax,
         marker="o",
-        color="royalblue",
+        color="fuchsia",
         markersize=5,
         zorder=2,
         linestyle="",
@@ -448,18 +449,32 @@ def plot_metric_along_trajectory(
     Return:
         ax, Axes.
     """
-    num_model = len(metrics)
-    colors = cm.rainbow(np.linspace(0, 1, num_model))
+    colors = {
+        "PABBO256": "violet",
+        "PABBO512": "darkviolet",
+        "PABBO1024": "deeppink",
+        "PABBO256_5": "yellow",
+        "PABBO": "violet",
+        "PABBO_synthetic": "fuchsia", 
+        "qTS": "blue",
+        "qEUBO": "orange",
+        "qEI": "green",
+        "qNEI": "grey",
+        "mpes": "red",
+        "rs": "black",
+    }
     if ax is None:
         _, ax = plt.subplots(figsize=(10, 8))
 
-    for i, (model_tra, c) in enumerate(zip(metrics, colors)):
+    for i, model_tra in enumerate(metrics):
         model_tra = model_tra.detach().cpu().numpy()
         x = np.arange(model_tra.shape[-1])
         mean = model_tra.mean(axis=0).flatten()
         ci = confidence_interval(model_tra)
-        ax.plot(x, mean, "o-", color=c, label=f"{model_names[i]}")
-        ax.fill_between(x, mean + ci, mean - ci, alpha=0.3, color=c)
+        ax.plot(x, mean, "o-", color=colors[model_names[i]], label=f"{model_names[i]}")
+        ax.fill_between(
+            x, mean + ci, mean - ci, alpha=0.3, color=colors[model_names[i]]
+        )
 
     plt.tight_layout()
     return ax

@@ -1,8 +1,7 @@
-**evaluation**
 **.env**
 **outputs**
 **results**
-**wandb**
+**wandb/**
 **TODO.md**
 ***.out**
 ***.ipynb**

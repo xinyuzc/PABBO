@@ -42,7 +42,7 @@ def create_sobol_grid(d_x: int, num: int, x_range: List[List[float]] = [[0.0, 1.
     loc = sobol_seq.i4_sobol_generate(dim_num=d_x, n=num)  # \in (0, 1)
 
     if not isinstance(x_range, np.ndarray):
-        x_range = np.array(x_range)
+        x_range = np.array(x_range.detach().cpu().numpy())
 
     loc = scale_from_unit_to_domain(loc, x_range)
     return loc
@@ -227,7 +227,7 @@ class MyNDInterpolator:
         else:
             raise ValueError(f"{interpolator_type} is not supported.")
 
-    def __call__(self, xx: torch.Tensor) -> torch.Tensor:
+    def __call__(self, xx: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
         """Interpolote at points xx.
 
         Args:
@@ -236,18 +236,24 @@ class MyNDInterpolator:
         Returns:
             yy, (..., 1)
         """
-        xx = xx.detach().cpu().numpy()
-        if xx.ndim == 2:
-            xx = xx[None, :, :]
-        B = len(xx)
-        yy = list()
-        for b in range(B):
-            if self.interpolator == "nearest":
-                y = self.ext(*[xx[b, :, i] for i in range(xx.shape[-1])])
+        to_tensor = False
+        if isinstance(xx, torch.Tensor):
+            to_tensor = True
+            device = xx.device
+            xx = xx.detach().cpu().numpy()
+        if xx.ndim == 2:  # no batch dim
+            if self.interpolator_type == "nearest":
+                yy = self.ext(*[xx[:, i] for i in range(xx.shape[-1])])
             else:
-                y = LND_fill_oob_with_nn(XX=xx[b], ext=self.ext, X=self.X, y=self.y)
-            yy.append(y)
-        yy = np.stack(yy, axis=0)
-        if len(yy) == 1:
-            yy = yy.reshape(-1, 1)
-        return yy
+                yy = LND_fill_oob_with_nn(xx=xx, ext=self.ext, X=self.X, y=self.y)
+        else:
+            B = len(xx)
+            yy = list()
+            for b in range(B):
+                if self.interpolator_type == "nearest":
+                    y = self.ext(*[xx[b, :, i] for i in range(xx.shape[-1])])
+                else:
+                    y = LND_fill_oob_with_nn(xx=xx[b], ext=self.ext, X=self.X, y=self.y)
+                yy.append(y)
+            yy = np.stack(yy, axis=0)
+        return torch.from_numpy(yy).to(device) if to_tensor else yy

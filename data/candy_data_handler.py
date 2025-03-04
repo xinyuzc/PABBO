@@ -13,19 +13,20 @@ class CandyDataHandler:
     def __init__(
         self,
         root_dir: str = "datasets/candy-data",
+        filename: str = "candy-data.csv",
+        interpolator_type: str = "linear",
     ):
-        """Data handler for candy dataset.
+        """Handler for the candy dataset.
 
         Attrs:
-            num_total_points, scalar: the number of objects.
-            d_x, scalar: number of features.
-            raw_X, np.ndarray[num_total_points, 2]: candy object containing two features.
-            scaled_X, np.ndarray[num_total_points, 2]: standardized candy object.
-            raw_y, np.ndarray[num_total_points, 1]: associated utility values.
-            std_y, np.ndarray[num_total_points, 1] standardized utility values.
-            x_range, list of two elements: input range.
+            num_total_points, scalar: number of samples.
+            d_x, scalar: input dimension.
+            raw_X, np.ndarray[num_total_points, 2]: two continuous input features `sugarpercent` and `pricepercent`.
+            X, np.ndarray[num_total_points, 2]: min-max scaled input features.
+            raw_y, np.ndarray[num_total_points, 1]: associated utility values, `winpercent`.
+            y, np.ndarray[num_total_points, 1] min-max scaled utility values.
+            x_range, list: data range of each feature.
         """
-        filename = "candy-data.csv"
         self.root_dir = root_dir
         self.raw_data = pd.read_csv(osp.join(root_dir, filename)).drop(
             labels=[
@@ -43,100 +44,91 @@ class CandyDataHandler:
         )  # drop useless columns
 
         self.num_total_points = len(self.raw_data)
+        self.x_range = [0, 1]
         self.raw_X = self.raw_data[["sugarpercent", "pricepercent"]].to_numpy()
-        self.scaled_X = (self.raw_X - np.min(self.raw_X, axis=0)[None, :]) / (
+        self.X = (self.raw_X - np.min(self.raw_X, axis=0)[None, :]) / (
             np.max(self.raw_X, axis=0) - np.min(self.raw_X, axis=0)
         )[None, :]
         self.raw_y = (
             self.raw_data["winpercent"].to_numpy().reshape(self.num_total_points, -1)
         )
-        self.std_y = MinMaxScaler().fit_transform(self.raw_y)
-        self.x_range = [0, 1]
-        self.d_x = self.raw_X.shape[-1]
-        self.utility = None
+        self.y = MinMaxScaler().fit_transform(self.raw_y)
+        # fit a linear extrapolator on the discrete data and find global optimum
+        self.interpolator_type = interpolator_type
+        self.fit(interpolator_type=interpolator_type)
+
+    def fit(
+        self,
+        interpolator_type: str = "linear",
+    ) -> Tuple[MyNDInterpolator, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Fit an extrapolator on the discrete candy dataset.
+
+        Args:
+            interpolator_type, str in ["linear", "nearest"]: the out-of-bound values will be filled with its nearest neighbor's value when using linear interpolator.
+        """
+        self.yopt = np.max(self.y, axis=0, keepdims=True)  # (1, 1)
+        self.Xopt = np.take_along_axis(
+            self.X, np.argmax(self.y, axis=0, keepdims=True), axis=0
+        )
+        self.utility = MyNDInterpolator(
+            X=self.X, y=self.y, interpolator_type=interpolator_type
+        )
+
+    def get_utility(self):
+        """Get fitted extrapolator."""
+        return self.utility
 
     def get_data(
         self, add_batch_dim: bool = False
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Load candy dataset.
+        """Get candy dataset.
 
         Args:
             add_batch_dim, bool: whether to add batch dimension.
 
         Returns:
-            X, (1, num_total_points, 2) if add_batch_dim else (num_total_points, 2)
-            y, (1, num_total_points, 1) if add_batch_dim else (num_total_points, 1)
-            Xopt, (1, 1, 2) if add_batch_dim else (1, 2)
-            yopt, (1, 1, 1) if add_batch_dim else (1, 1)
+            X, (1, num_total_points, 2) if add_batch_dim else (num_total_points, 2): datapoints.
+            y, (1, num_total_points, 1) if add_batch_dim else (num_total_points, 1): associated utility values.
+            Xopt, (1, 1, 2) if add_batch_dim else (1, 2): global optimum locations.
+            yopt, (1, 1, 1) if add_batch_dim else (1, 1): global optimum.
 
         """
-        X = self.scaled_X
-        y = self.std_y
-        yopt = np.max(y, axis=0, keepdims=True)  # (1, 1)
-        Xopt = np.take_along_axis(X, np.argmax(y, axis=0, keepdims=True), axis=0)
         if add_batch_dim:
-            X, y, Xopt, yopt = (
-                X[None, :, :],
-                y[None, :, :],
-                Xopt[None, :, :],
-                yopt[None, :, :],
+            return (
+                self.X[None, :, :],
+                self.y[None, :, :],
+                self.Xopt[None, :, :],
+                self.yopt[None, :, :],
             )
-        return X, y, Xopt, yopt
-
-    def linear_extrapolation(
-        self,
-        interpolator_type: str = "linear",
-    ) -> Tuple[MyNDInterpolator, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Generalize the candy dataset to continous space with linear extrapolation.
-
-        Args:
-            interpolator_type, str in ["linear", "nearest"]
-
-        Returns:
-            utility: utility function through linear extrapolation on the candy dataset
-            Xopt, (1, 1, 2)
-            yopt, (1, 1, 1)
-            X, (1, num_total_points, 2)
-            y, (1, num_total_points, 1)
-        """
-        X, y, Xopt, yopt = self.get_data(add_batch_dim=False)
-        self.utility = MyNDInterpolator(X=X, y=y, interpolator_type=interpolator_type)
-        X, y, Xopt, yopt = (
-            X[None, :, :],
-            y[None, :, :],
-            Xopt[None, :, :],
-            yopt[None, :, :],
-        )
-        return self.utility, Xopt, yopt, X, y
+        else:
+            return self.X, self.y, self.Xopt, self.yopt
 
     def sample(
         self,
         batch_size: int = 1,
         num_points: int = 200,
     ):
-        """Sample from the generalized candy dataset.
+        """Sample the fitted extrapolator.
 
         Args:
-            batch_size, scalar
-            num_points, scalar: number of points in each set.
+            batch_size, scalar: batch size.
+            num_points, scalar: number of datapoints in each sampled dataset.
 
         Returns:
-            XX, (batch_size, num_points, 2)
-            YY, (batch_size, num_points, 1)
-            Xopt, (batch_size, 1, 2)
-            yopt, (batch_size, 1, 1)
+            XX, (batch_size, num_points, 2): sampled points.
+            YY, (batch_size, num_points, 1): associated utility values.
+            Xopt, (batch_size, 1, 2): global optimum location.
+            yopt, (batch_size, 1, 1): global optimum.
         """
-        if self.utility is None:
-            self.utility, Xopt, yopt, _, _ = self.linear_extrapolation()
         XX = (
             np.random.random((batch_size, num_points, 2))
             * (self.x_range[1] - self.x_range[0])
             + self.x_range[0]
         )
-        YY = self.utility(XX=XX)
+        YY = self.utility(XX)
         return (
             XX,
             YY,
-            np.tile(Xopt, (batch_size, 1, 1)),
-            np.tile(yopt, (batch_size, 1, 1)),
+            np.tile(self.Xopt, (batch_size, 1, 1)),
+            np.tile(self.yopt, (batch_size, 1, 1)),
         )

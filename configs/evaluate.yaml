@@ -4,7 +4,7 @@ defaults:
   - _self_
 
 experiment: 
-  model: qTS
+  model: ""
   mode: eval
   expid: ${experiment.model}_${data.name}_${now:%Y%m%d_%H%M%S}
   device: cpu
@@ -19,6 +19,10 @@ data:
   x_range: []
   min_num_ctx: -1
   max_num_ctx: -1
+  search_space_id: ''
+  standardize: false
+
+
 
 wandb: 
   name: ${experiment.expid}
@@ -46,10 +50,12 @@ eval:
     p_iso: 0.5
   interpolator_type: linear
   eval_num_query_points: 256
+  sobol_grid: true
   argmax: false
   plot_freq: -1
   plot_dataset_id: -1
   plot_seed_id: -1
+  num_parallel: 1
 
 model: 
   d_x: ${data.d_x}
