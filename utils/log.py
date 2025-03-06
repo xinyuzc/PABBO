@@ -15,44 +15,6 @@ def get_logger(file_name: str, mode="a"):
     return logger
 
 
-# class TensorAverager(object):
-#     def __init__(self):
-#         """An averager to record Tensor outputs."""
-#         self.tensors = OrderedDict()  # List of L tensor of shape (..., D)
-#         self.shapes = OrderedDict()
-
-#     def update(self, key: str, val: torch.Tensor):
-#         """insert val into tensors[key]
-
-#         Args:
-#             key, str: name.
-#             val, (..., D): tensor to be recorded, whose shape should match the shape recorded in self.shapes[key]
-#         """
-#         if self.tensors.get(key, None) is None:
-#             self.tensors[key] = [val]
-#             self.shapes[key] = val.shape
-#         else:
-#             if self.shapes[key] != val.shape:
-#                 raise ValueError("Unmatched shape of `val` and recorded elements.")
-#             self.tensors[key].append(val)
-
-#     def reset(self):
-#         for key in self.tensors.keys():
-#             self.tensors[key] = list()
-
-#     def clear(self):
-#         self.tensors = OrderedDict()
-#         self.shapes = OrderedDict()
-
-#     def get(self, key):
-#         if self.tensors.get(key, None) is None:
-#             raise ValueError
-#         t = (
-#             torch.stack(self.tensors[key], dim=0).float().mean(dim=0)
-#         )  # NOTE dtype (..., D)
-#         return t
-
-
 class Averager(object):
     def __init__(self, *keys):
         """An averager to record numeric metrics.

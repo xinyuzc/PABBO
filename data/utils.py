@@ -120,6 +120,8 @@ def get_random_split_data(
     max_num_ctx: int = 30,
 ):
     """randomly split a sequence of `total_num` elements into context and target set."""
+    if max_num_ctx >= total_num:
+        raise ValueError("`max_num_ctx` should be smaller than `total_num`.")
     num_ctx_pairs = random.randint(min_num_ctx, max_num_ctx)
     num_tar_pairs = total_num - num_ctx_pairs
     rand_idx = [*range(total_num)]

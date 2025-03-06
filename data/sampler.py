@@ -36,14 +36,13 @@ def transform_with_global_optimum(
         f: transformed utility values.
         yopt: the global optimum.
     """
-    # we use broader lengthscale for wider input space
-    # 1 / 2 * mean(range ** 2)
+    # broader lengthscale for wider input space
     quad_lengthscale_squared = 2 * torch.mean(
         (x_range[:, 1].float() - x_range[:, 0].float()) ** 2
     )
     quadratic_factor = 1.0 / quad_lengthscale_squared
 
-    # f = |y| + 1/8 ||x - xopt|| ** 2 + f_offset
+    # transform the GP samples by taking the absolute value, adding a quadratic bowl and an offset
     f = (
         torch.abs(y)
         + quadratic_factor
@@ -384,7 +383,7 @@ class OptimizationSampler(object):
         self.maximize = maximize
         self.device = device
 
-        self.batch_utility = []
+        self.utility = []
 
     def sample(
         self,
@@ -416,7 +415,7 @@ class OptimizationSampler(object):
         (_X, _Y, _XOPT, _YOPT, _UTILITY) = ([], [], [], [], [])
         x_range = torch.tensor(x_range)  # (d_x, 2)
         for _ in range(batch_size):
-            x, y, xopt, yopt, utiltiy = self.sample_a_function(
+            x, y, xopt, yopt, utility = self.sample_a_function(
                 max_num_ctx_points=max_num_ctx_points,
                 num_total_points=num_total_points,
                 x_range=x_range,
@@ -430,15 +429,15 @@ class OptimizationSampler(object):
             _YOPT.append(yopt)
 
             # save the GP curve
-            if utiltiy is not None:
-                _UTILITY.append(utiltiy)
+            if utility is not None:
+                _UTILITY.append(utility)
 
+        self.utility = _UTILITY
         return (
             torch.stack(_X, dim=0),
             torch.stack(_Y, dim=0),
             torch.stack(_XOPT, dim=0),
             torch.stack(_YOPT, dim=0),
-            _UTILITY,
         )
 
     def sample_length_scale(self) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -475,7 +474,7 @@ class OptimizationSampler(object):
         x_range: torch.Tensor,
         max_num_ctx_points: int = 50,
         num_total_points: int = 100,
-        sobol_grid: bool = True,
+        sobol_grid: bool = False,
         evaluate: bool = False,
     ) -> Tuple[
         torch.Tensor,

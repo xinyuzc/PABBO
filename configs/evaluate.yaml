@@ -2,6 +2,8 @@ defaults:
   - hydra: default  
   - wandb_cfg@wandb: default
   - _self_
+  - override hydra/hydra_logging: none  
+  - override hydra/job_logging: none  
 
 experiment: 
   model: ""

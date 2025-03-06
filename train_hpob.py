@@ -8,7 +8,6 @@ import wandb
 from omegaconf import DictConfig
 import hydra
 from wandb_wrapper import init as wandb_init, save_artifact
-from policies.policy import TransformerModel
 from data.hpob import HPOBHandler
 from data.environment import generate_query_pair_set, sample_random_pairs_from_Q
 from data.utils import *
@@ -119,7 +118,7 @@ def train(config: DictConfig, model: TransformerModel):
             X_ac, y_ac, Xopt, yopt = sampler.sample(
                 batch_size=B,
                 search_space_id=config.data.search_space_id,
-                num_points=num_query_points,
+                num_total_points=num_query_points,
                 standardize=config.data.standardize,
                 train_split="acq",
                 split="train",
@@ -140,7 +139,7 @@ def train(config: DictConfig, model: TransformerModel):
                 num_total_points=num_query_points,
                 n_random_pairs=n_random_pairs,
                 p_noise=config.train.p_noise,
-                rank_latent_value=config.train.rank_latent_value,
+                ranking_reward=config.ranking_reward,
             )
             # mask to register queried pairs
             mask = torch.ones(
@@ -168,7 +167,7 @@ def train(config: DictConfig, model: TransformerModel):
         X_pred, y_pred, _, _ = sampler.sample(
             batch_size=B,
             search_space_id=config.data.search_space_id,
-            num_points=num_prediction_points,
+            num_total_points=num_prediction_points,
             standardize=config.data.standardize,
             train_split="pred",
             split="train",

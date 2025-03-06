@@ -273,7 +273,6 @@ def evaluate_on_a_utility(
         bound2=train_x_range,
     )
     # create `num_parallel` candidate query pair set
-    # query_pair_idx (num_query_pairs, 2) only specifies possible pair indices and is shared between each candidate query pair set
     query_pair_idx, query_pair, query_pair_y, query_c = generate_query_pair_set(
         X=X,
         y=y,
@@ -315,7 +314,7 @@ def evaluate_on_a_utility(
             dataset_kt_cor.append(kt_cor)
 
             t0 = time.time()
-            # predict acquisition function values for all points in the query set Q
+            # predict acquisition function values for pairs in each dataset
             acq_values, next_pair_idx, log_prob, entropy = action(
                 model=model,
                 context_pairs=context_pairs.tile(num_parallel, 1, 1),
@@ -341,7 +340,7 @@ def evaluate_on_a_utility(
             next_set_pair_idx = next_pair_idx[next_set_idx].int().item()
             mask[next_set_idx, next_set_pair_idx] = False
 
-            # update observation
+            # update observations and candidate set with the next query
             next_pair = query_pair[next_set_idx, next_set_pair_idx][None, None, :]
             next_pair_y = query_pair_y[next_set_idx, next_set_pair_idx][None, None, :]
             next_c = query_c[next_set_idx, next_set_pair_idx][None, None, :]

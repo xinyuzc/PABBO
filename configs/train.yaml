@@ -5,6 +5,15 @@ defaults:
   - override hydra/hydra_logging: none  
   - override hydra/job_logging: none  
   
+data: 
+  name: ""
+  d_x: -1
+  x_range: []
+  min_num_ctx: -1
+  max_num_ctx: -1
+  standardize: false
+  search_space_id: ""
+
 experiment: 
   model: PABBO
   mode: train
@@ -26,8 +35,8 @@ train:
     lengthscale_range: [0.05, 2]
     std_range: [0.1, 2]
     p_iso: 0.5
-  rank_latent_value: false
-
+  
+  ranking_reward: false
   train_seed: 0
   n_steps: 8000
   n_burnin: 3000

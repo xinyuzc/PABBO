@@ -158,7 +158,7 @@ def main(config: DictConfig):
         )
 
 
-def evalate_on_a_dataset(
+def evaluate_on_a_discrete_dataset(
     model: TransformerModel,
     seed: int,
     X_pending: torch.Tensor,
@@ -183,24 +183,24 @@ def evalate_on_a_dataset(
         y_pending, (num_candidates, 1): associated utility values.
         Xopt, (num_global_optima, d_x): the global optima locations.
         yopt, (num_global_optima, 1): the global optima.
-        test_x_range, (d_x, 2)
-        train_x_range, (d_x, 2)
-        initial_pairs, (num_initial_pairs, 2 * d_x)
-        initial_pairs_y, (num_initial_pairs, 2)
-        initial_c, (num_initial_pairs, 2)
+        test_x_range, (d_x, 2): representing the range of test input values.
+        train_x_range, (d_x, 2): representing the range of training input values.
+        initial_pairs: (num_initial_pairs, 2*d_x): starting pairs.
+        initial_pairs_y, (num_initial_pairs, 2): associated utility values.
+        initial_c, (num_initial_pairs, 1): associated preference.
         p_noise, float: the observed noise when giving preference.
         eval_max_T, int: time budget.
-        argmax, bool: whether to propose the query with the largest predicted acq_value or sample from the entire policy.
+        argmax, bool: whether to propose the query with the largest predicted acq_value or sample from the policy distribution.
 
-    Returns:
-        dataset_simple_regret, (1, T+1): yopt - max_{i=1}^t max {y_{i,1}, y_{i,2}}
-        dataset_immediate_regret, (1, T+1): yopt - max {y_{t,1}, y_{t,2}}
-        dataset_cumulative_time, (1, T)
-        dataset_entropy, (1, T)
-        dataset_kt_cor, (1, T)
-        dataset_inference_regret, (1, T)
-
+    Returns: a dictionary containing various evaluation metrics:
+        - "simple_regret", (1, T+1): A tensor containing simple regret values at each optimization step.
+        - "immediate_regret", (1, T+1): A tensor containing immediate regret values at each optimization step.
+        - "inference_regret", (1, T+1): A tensor containing inference regret values at each optimization step.
+        - "cumulative_time", (1, T): A tensor containing cumulative inference at each optimization step.
+        - "entropy", (1, T): A tensor containing entropy values at each optimization step.
+        - "kt_cor", (1, T): A tensor containing kendall-tau correlation on the query set at each optimization step.
     """
+
     set_all_seeds(seed)
 
     # visualize the trajectory on 1- or 2-d function
@@ -345,16 +345,21 @@ def evalate_on_a_dataset(
 
 
 def evaluate(config: DictConfig, model: TransformerModel):
-    """Evaluate PABBO on HPOB benchmark.
+    """Evaluate PABBO on HPOB tasks over discrete space.
 
-    Returns:
-        SIMPLE_REGRET, (num_seed, T+1)
-        IMMEDIATE_REGRET, (num_seed, T+1)
-        CUMULATIVE_REGRET, (num_seed, T+1)
-        ENTROPY, (num_seed, T)
-        KT_COR, (num_seed, T)
-        CUMULATIVE_TIME, (num_seed, T)
-        INFERENCE_REGRET, (num_seed, T)
+    Args:
+        config: Configuration object containing hyperparameters and settings.
+        model: PABBO.
+
+    Returns: a dictionary with the following keys and values:
+            - "simple_regret", (num_seed, B, T+1): The simple regret metric.
+            - "immediate_regret", (num_seed, B, T+1): The immediate regret metric.
+            - "cumulative_regret", (num_seed, B, T+1): The cumulative regret metric.
+            - "inference_regret", (num_seed, B, T): The inference regret metric.
+            - "entropy", (num_seed, B, T): The entropy metric.
+            - "kt_cor", (num_seed, B, T): The KT correlation metric.
+            - "cumulative_time", (num_seed, B, T): The cumulative time metric.
+
     """
     datapath = get_evaluation_datapath(
         root=osp.join(hydra.utils.get_original_cwd(), DATASETS_PATH),
@@ -420,7 +425,7 @@ def evaluate(config: DictConfig, model: TransformerModel):
         # evaluate on each dataset
         for b in tqdm(range(B), f"Evaluating on {B} datasets..."):
             # evaluate on each dataset
-            dataset_metrics = evalate_on_a_dataset(
+            dataset_metrics = evaluate_on_a_discrete_dataset(
                 model=model,
                 seed=seed,
                 Xopt=XOPT[b],

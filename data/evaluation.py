@@ -54,7 +54,7 @@ def generate_test_function_evaluation_task(
         "test_x_range": test_x_range,
         "train_x_range": train_x_range,
         "Xopt": Xopt[None, :, :],  # only one dataset
-        "yopt": -yopt[None, :, :],  # negate
+        "yopt": -yopt[None, :, :],  # NOTE negate
         "utility": utility,
     }
     # generate intial pairs with different random seeds
@@ -177,7 +177,7 @@ def generate_gp_evaluation_task(
         maximize=True,
         device=device,
     )
-    X, y, Xopt, yopt, utility = sampler.sample(
+    X, y, Xopt, yopt = sampler.sample(
         batch_size=num_datasets,
         max_num_ctx_points=max_num_ctx_points,
         num_total_points=num_total_points,
@@ -190,7 +190,7 @@ def generate_gp_evaluation_task(
     # save attributes in each `OptimizationFunction` utility
     SAMPLER_KWARGS = list()
     FUNCTION_KWARGS = list()
-    for u in utility:
+    for u in sampler.utility:
         s = u.sampler
         function_kwargs = {
             "maximize": u.maximize,
@@ -249,15 +249,10 @@ def generate_hpob_evaluation_task(
     handler = HPOBHandler(root_dir="datasets/hpob-data", mode="v3-test")
     X, y, Xopt, yopt = handler.sample(
         search_space_id=search_space_id,
-        num_points=1024,  # evaluate on pairs generated from 1024 samples
+        num_total_points=1024,  # evaluate on pairs generated from 1024 samples
         standardize=standardize,
         split="test",
-    )
-    X, y, Xopt, yopt = (
-        torch.from_numpy(X).to(device),
-        torch.from_numpy(y).to(device),
-        torch.from_numpy(Xopt).to(device),
-        torch.from_numpy(yopt).to(device),
+        device=device,
     )
     num_datasets = len(X)
     d_x = X.shape[-1]

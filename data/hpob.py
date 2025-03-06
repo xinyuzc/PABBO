@@ -199,11 +199,11 @@ class HPOBHandler:
                 print(f"saved model at {gp_model_path}")
 
                 # free GPU
-                normX = normX.cpu()
-                std_y = std_y.cpu()
+                normX = normX.cpu().numpy()
+                std_y = std_y.cpu().numpy()
                 mll = mll.cpu()
                 model.eval()
-                del normX, std_y, mll  # NOTE don't delete the model...
+                del mll  # NOTE don't delete the model...
                 torch.cuda.empty_cache()
 
         else:
@@ -312,28 +312,29 @@ class HPOBHandler:
     def sample(
         self,
         search_space_id: str,
-        num_points: int,
+        num_total_points: int,
         batch_size: int = 1,
         standardize: bool = True,
         train_split: str = "acq",
         split: str = "train",
+        device: str = "cuda",
         **kwargs,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """sample a batch of data from specified search space.
 
         Args:
             search_space_id, str: ID of search space.
             batch_size, int: number of datasets to sample in specified search space. All datasets are returned if `batch_size` is larger than the total number.
-            num_points, int:  number of samples in each dataset. The entire dataset is returned if `num_points` is larger than dataset size.
+            num_total_points, int:  number of samples in each dataset. The entire dataset is returned if `num_points` is larger than dataset size.
             standardize, bool: whether to standardize y.
             split, str in ["train", "val", "test"]: sample training, validation, or test data.
             train_split, str in ["pred", "acq"]: sample training data for prediction or acquisition tasks.
 
         Returns:
-            X, (batch_size, num_points, d_x):
-            y, (batch_size, num_points, 1):
-            Xopt, (batch_size, 1, d_x): input corresponding to the maximal function value.
-            yopt, (batch_size, 1, 1), : maximal function value.
+            X, (batch_size, num_points, d_x): sampled points.
+            y, (batch_size, num_points, 1): associated utility values.
+            Xopt, (batch_size, 1, d_x): optimum location.
+            yopt, (batch_size, 1, 1), : optimum.
         """
         if split not in ["train", "val", "test"]:
             raise ValueError("Provide a valid data split.")
@@ -367,7 +368,7 @@ class HPOBHandler:
             X, y, Xopt, yopt = self.sample_a_task(
                 search_space_id=search_space_id,
                 task_id=task_id,
-                num_points=num_points,
+                num_points=num_total_points,
                 split=split,
                 train_split=train_split,
                 standardize=standardize,
@@ -379,8 +380,8 @@ class HPOBHandler:
             _YOPT.append(yopt)
 
         return (
-            np.stack(_X, axis=0),
-            np.stack(_Y, axis=0),
-            np.stack(_XOPT, axis=0),
-            np.stack(_YOPT, axis=0),
+            torch.from_numpy(np.stack(_X, axis=0)).float().to(device),
+            torch.from_numpy(np.stack(_Y, axis=0)).float().to(device),
+            torch.from_numpy(np.stack(_XOPT, axis=0)).float().to(device),
+            torch.from_numpy(np.stack(_YOPT, axis=0)).float().to(device),
         )
