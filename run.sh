@@ -3,9 +3,20 @@
 #SBATCH --mem=3G
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:2
-#SBATCH --time=10:00:00
+#SBATCH --time=25:00:00
 #SBATCH --partition=gpu-a100-80g
 ##SBATCH --partition=gpu-debug
+
+python train.py --config-name=train  \
+experiment.expid=PABBO_GP2D_st  \
+data.name=GP2D  \
+data.d_x=2 \
+data.x_range="[[-1,1], [-1, 1]]"  \
+data.min_num_ctx=1  \
+data.max_num_ctx=100 \
+train.num_query_points=200 \
+train.num_prediction_points=200 \
+train.n_random_pairs=200 
 
 # python train.py --config-name=train \
 # experiment.expid=PABBO_GP1D \

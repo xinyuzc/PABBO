@@ -4,8 +4,17 @@
 #SBATCH --nodes=1
 #SBATCH --time=00:30:00
 #SBATCH --constraint=milan
-#SBATCH --gres=gpu:1
-#SBATCH --partition=gpu-debug
+##SBATCH --gres=gpu:1
+##SBATCH --partition=gpu-debug
+
+python evaluate_gp.py --config-name=evaluate  \
+experiment.model=PABBO  \
+experiment.expid=PABBO_GP4D  \
+experiment.device=cpu \
+eval.eval_max_T=100  \
+data.name=sushi  \
+data.d_x=4  \
+eval.eval_num_query_points=512  
 
 # python evaluate_gp.py --config-name=evaluate  \
 # experiment.model=PABBO  \
@@ -20,17 +29,17 @@
 # data.Xopt="[[0.20169, 0.150011, 0.476874, 0.275332, 0.311652, 0.6573]]"  \
 # data.yopt="[[-3.32237]]" 
 
-python evaluate_gp.py --config-name=evaluate  \
-experiment.model=PABBO  \
-experiment.expid=PABBO_GP6D_st  \
-experiment.device=cuda  \
-eval.eval_max_T=60 \
-eval.eval_num_query_points=512 \
-eval.num_parallel=1 \
-data.name=levy6D \
-data.d_x=6 \
-data.x_range="[[-10, 10],[-10, 10],[-10, 10],[-10, 10],[-10, 10],[-10, 10]]" \
-data.yopt="[[0.0]]" data.Xopt="[[1.0,1.0,1.0,1.0,1.0,1.0]]" 
+# python evaluate_gp.py --config-name=evaluate  \
+# experiment.model=PABBO  \
+# experiment.expid=PABBO_GP6D_st  \
+# experiment.device=cuda  \
+# eval.eval_max_T=60 \
+# eval.eval_num_query_points=512 \
+# eval.num_parallel=1 \
+# data.name=levy6D \
+# data.d_x=6 \
+# data.x_range="[[-10, 10],[-10, 10],[-10, 10],[-10, 10],[-10, 10],[-10, 10]]" \
+# data.yopt="[[0.0]]" data.Xopt="[[1.0,1.0,1.0,1.0,1.0,1.0]]" 
 
 
 # python evaluate_gp.py --config-name=evaluate  \
