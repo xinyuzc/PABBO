@@ -1,9 +1,8 @@
 **.env**
 **results**
-**wandb/**
+**wandb**
 ***.out**
-***.pyc**
 **datasets**
 ***.log**
-***.sh**
 *.pyc
+*.sh

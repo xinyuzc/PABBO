@@ -18,7 +18,10 @@ JITTER = 1e-2
 
 
 class MultinomialPredictiveEntropySearch(MCAcquisitionFunction):
-    r"""Multinomial Predictive Entropy Search (MPES)"""
+    r"""Multinomial Predictive Entropy Search (MPES)
+    Adapted from qEUBO (MIT license)
+    Source: https://github.com/facebookresearch/qEUBO/blob/21cd661efc25b242c9fdf5230f5828f01ff0872b/src/acquisition_functions/mpes.py
+    """
 
     def __init__(
         self,

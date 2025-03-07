@@ -18,14 +18,19 @@ class CandyDataHandler:
     ):
         """Handler for the candy dataset.
 
+        Args:
+            root_dir, str: the datapath.
+            filename, str: the csv file under the datapath.
+            interpolator_type, str: we do linear / nearest interpolation on the dataset and fill the out-of-bound point with its closest neighbor's value.
+
         Attrs:
-            num_total_points, scalar: number of samples.
+            num_total_points, scalar: total number of datapoints.
             d_x, scalar: input dimension.
-            raw_X, np.ndarray[num_total_points, 2]: two continuous input features `sugarpercent` and `pricepercent`.
-            X, np.ndarray[num_total_points, 2]: min-max scaled input features.
-            raw_y, np.ndarray[num_total_points, 1]: associated utility values, `winpercent`.
-            y, np.ndarray[num_total_points, 1] min-max scaled utility values.
-            x_range, list: data range of each feature.
+            raw_X, np.ndarray [num_total_points, 2]: two continuous raw features `sugarpercent` and `pricepercent`.
+            X, np.ndarray [num_total_points, 2]: min-max scaled `raw_X`.
+            raw_y, np.ndarray [num_total_points, 1]: raw utility values, `winpercent`.
+            y, np.ndarray [num_total_points, 1] min-max scaled `raw_y`.
+            x_range, list: data range for feature.
         """
         self.root_dir = root_dir
         self.raw_data = pd.read_csv(osp.join(root_dir, filename)).drop(
@@ -41,7 +46,7 @@ class CandyDataHandler:
                 "pluribus",
             ],
             axis=1,
-        )  # drop useless columns
+        )
 
         self.num_total_points = len(self.raw_data)
         self.x_range = [0, 1]
@@ -53,7 +58,8 @@ class CandyDataHandler:
             self.raw_data["winpercent"].to_numpy().reshape(self.num_total_points, -1)
         )
         self.y = MinMaxScaler().fit_transform(self.raw_y)
-        # fit a linear extrapolator on the discrete data and find global optimum
+
+        # fit a linear interpolator on the datapoints
         self.interpolator_type = interpolator_type
         self.fit(interpolator_type=interpolator_type)
 
@@ -75,22 +81,21 @@ class CandyDataHandler:
         )
 
     def get_utility(self):
-        """Get fitted extrapolator."""
         return self.utility
 
     def get_data(
         self, add_batch_dim: bool = False
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Get candy dataset.
+        """Retrieve the candy dataset.
 
         Args:
-            add_batch_dim, bool: whether to add batch dimension.
+            add_batch_dim, bool: whether to add a batch dimension.
 
         Returns:
             X, (1, num_total_points, 2) if add_batch_dim else (num_total_points, 2): datapoints.
             y, (1, num_total_points, 1) if add_batch_dim else (num_total_points, 1): associated utility values.
             Xopt, (1, 1, 2) if add_batch_dim else (1, 2): global optimum locations.
-            yopt, (1, 1, 1) if add_batch_dim else (1, 1): global optimum.
+            yopt, (1, 1, 1) if add_batch_dim else (1, 1): global optimum value.
 
         """
         if add_batch_dim:
@@ -108,17 +113,17 @@ class CandyDataHandler:
         batch_size: int = 1,
         num_points: int = 200,
     ):
-        """Sample the fitted extrapolator.
+        """Sample from the fitted extrapolator.
 
         Args:
             batch_size, scalar: batch size.
             num_points, scalar: number of datapoints in each sampled dataset.
 
         Returns:
-            XX, (batch_size, num_points, 2): sampled points.
+            XX, (batch_size, num_points, 2): sampled datapoints.
             YY, (batch_size, num_points, 1): associated utility values.
             Xopt, (batch_size, 1, 2): global optimum location.
-            yopt, (batch_size, 1, 1): global optimum.
+            yopt, (batch_size, 1, 1): global optimum value.
         """
         XX = (
             np.random.random((batch_size, num_points, 2))

@@ -1,9 +1,0 @@
-defaults:
-  - datasets@data: GP4D
-  - _train
-  - _self_
-
-train: 
-  num_query_points: 300
-  num_prediction_points: 300
-  n_random_pairs: 300

@@ -10,14 +10,13 @@ This is the code repository for paper PABBO: Preferential Amortized Black-Box Op
     ```
     WANDB_API_KEY=...
     ```
-3. Save HPOB and real-world data under following paths: 
+3. Save HPOB and real-world data under the paths: 
    1. Candy: `datasets/candy-data/candy-data.csv`
    2. Sushi: `datasets/sushi-data/sushi3.idata`, `datasets/sushi-data/sushi3b.5000.10.score`
    3. HPOB: `datasets/hpob-data/meta-test-dataset.json`, `datasets/hpob-data/meta-validation-dataset.json`, `datasets/hpob-data/meta-train-dataset-augmented.json`
 # Training 
-Configuration is saved under path `configs/evaluate.yaml`. Adjust and run the scripts. 
+The default configuration is saved at `configs/evaluate.yaml`. You can modify the settings there or directly pass arguments. Note that the data configuration needs to be provided. The training script is located in `train.py`. Checkpoints will be saved under `results/evaluation/PABBO/{experiment.expid}`.
 
-Checkpoint will be saved under path `results/evaluation/PABBO/{experiment.expid}`.
 
 To train PABBO on **1-dimensional GP-based samples**: 
 ```bash
@@ -132,14 +131,12 @@ train.num_prediction_points=300 \
 train.n_random_pairs=300 
 ```
 # Testing 
-Configuration is saved under path `configs/evaluate.yaml`. Run the scripts with test data information passed as arguments. 
-
-Results will be saved under path `results/evaluation/{data.name}/PABBO/{experiment.expid}`.
+The default configuration is saved at `configs/evaluate.yaml`. You can modify the settings there or directly pass arguments. Note that the data configuration needs to be provided. The evaluation script on continuous search space is located in `evaluation_continuous.py`; the script for discrete input is located in `evaluation_discret.py`. Results will be saved under `results/evaluation/{data.name}/PABBO/{experiment.expid}`.
 
 To test PABBO on **1-dimensional GP-based samples**:
 
 ```bash 
-python evaluate_gp.py --config-name=evaluate  \
+python evaluate_continuous.py --config-name=evaluate  \
 experiment.model=PABBO  \
 experiment.expid=PABBO_GP1D  \
 experiment.device=cpu  \
@@ -150,15 +147,15 @@ data.max_num_ctx=50  \
 data.min_num_ctx=1  \
 eval.eval_num_query_points=256  \
 eval.plot_freq=10 \
- eval.plot_dataset_id=-1  \
- eval.plot_seed_id=0  \
- eval.sobol_grid=true \
+eval.plot_dataset_id=-1  \
+eval.plot_seed_id=0  \
+eval.sobol_grid=true \
 ```
 
 
 To test PABBO on **2-dimensional GP-based samples**: 
 ```bash
-python evaluate_gp.py --config-name=evaluate  \
+python evaluate_continuous.py --config-name=evaluate  \
 experiment.model=PABBO  \
 experiment.expid=PABBO_GP2D  \
 experiment.device=cpu  \
@@ -175,7 +172,7 @@ eval.sobol_grid=true
 ```
 To test PABBO on **forrester1D function**: 
 ```bash 
-python evaluate_gp.py --config-name=evaluate  \
+python evaluate_continuous.py --config-name=evaluate  \
 experiment.model=PABBO  \
 experiment.expid=PABBO_GP1D  \
 experiment.device=cpu  \
@@ -195,7 +192,7 @@ data.yopt="[[-6.020740]]"
 
 To test PABBO on **branin2D function**: 
 ```bash 
-python evaluate_gp.py --config-name=evaluate  \
+python evaluate_continuous.py --config-name=evaluate  \
 experiment.model=PABBO  \
 experiment.expid=PABBO_GP2D  \
 experiment.device=cpu  \
@@ -213,7 +210,7 @@ data.yopt="[[0.397887],[0.397887],[0.397887]]"
 ```
 To test PABBO on **beale2D function**: 
 ```bash 
-python evaluate_gp.py --config-name=evaluate  \
+python evaluate_continuous.py --config-name=evaluate  \
 experiment.model=PABBO  \
 experiment.expid=PABBO_GP2D  \
 experiment.device=cpu  \
@@ -231,7 +228,7 @@ data.yopt="[[0.]]"
 ```
 To test PABBO on **ackley6D function**: 
 ```bash
-python evaluate_gp.py --config-name=evaluate  \
+python evaluate_continuous.py --config-name=evaluate  \
 experiment.model=PABBO  \
 experiment.expid=PABBO_GP6D  \
 experiment.device=cpu  \
@@ -246,7 +243,7 @@ data.Xopt="[[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]"
 ```
 To test PABBO on **hartmann6D function**: 
 ```bash
-python evaluate_gp.py --config-name=evaluate  \
+python evaluate_continuous.py --config-name=evaluate  \
 experiment.model=PABBO  \
 experiment.expid=PABBO_GP6D  \
 experiment.device=cpu  \
@@ -261,7 +258,7 @@ data.yopt="[[-3.32237]]"
 ```
 To test PABBO on **levy6D function**: 
 ```bash
-python evaluate_gp.py --config-name=evaluate  \
+python evaluate_continuous.py --config-name=evaluate  \
 experiment.model=PABBO  \
 experiment.expid=PABBO_GP6D  \
 experiment.device=cpu  \
@@ -274,23 +271,9 @@ data.x_range="[[-10, 10],[-10, 10],[-10, 10],[-10, 10],[-10, 10],[-10, 10]]" \
 data.Xopt="[[1.0,1.0,1.0,1.0,1.0,1.0]]" \
 data.yopt="[[0.0]]" 
 ```
-To test PABBO on **HPOB5859**: 
-```bash
-python evaluate_hpob.py --config-name=evaluate  \
-experiment.model=PABBO  \
-experiment.expid=PABBO_HPOB5859  \
-experiment.device=cpu \
-train.x_i_range="[0, 1]" \
-eval.eval_max_T=100 \
-data.name=HPOB5859  \
-data.standardize=true  \
-data.search_space_id="5859" \
-data.d_x=6  \
-data.x_range="[[0, 1],[0, 1],[0, 1],[0, 1],[0, 1],[0, 1]]"  \
-```
 To test PABBO on **candy**: 
 ```bash
-python evaluate_gp.py --config-name=evaluate 
+python evaluate_continuous.py --config-name=evaluate 
 experiment.model=PABBO \
 experiment.expid=PABBO_GP2D \
 experiment.device=cpu  \
@@ -304,7 +287,7 @@ eval.plot_seed_id=-1
 ```
 To test PABBO on **sushi**:
 ```bash 
-python evaluate_gp.py --config-name=evaluate  \
+python evaluate_continuous.py --config-name=evaluate  \
 experiment.model=PABBO  \
 experiment.expid=PABBO_GP4D  \
 experiment.device=cpu \
@@ -313,13 +296,27 @@ data.name=sushi  \
 data.d_x=4  \
 eval.eval_num_query_points=512  
 ```
+To test PABBO on **HPOB5859**: 
+```bash
+python evaluate_discrete.py --config-name=evaluate  \
+experiment.model=PABBO  \
+experiment.expid=PABBO_HPOB5859  \
+experiment.device=cpu \
+train.x_i_range="[0, 1]" \
+eval.eval_max_T=100 \
+data.name=HPOB5859  \
+data.standardize=true  \
+data.search_space_id="5859" \
+data.d_x=6  \
+data.x_range="[[0, 1],[0, 1],[0, 1],[0, 1],[0, 1],[0, 1]]"  \
+```
 ## Baseline
-Specify: 
-- `experiment.model` in [rs, qTS, qEI, qEUBO, qNEI, mpes]: test acquisition function name.
-- `eval.dataset_id`: the id of dataset.
-- `seed_id`: the id of random seeds. 
+Except for data information, Specify the following parameters:
+- `experiment.model`: The acquisition function name, chosen from [rs, qTS, qEI, qEUBO, qNEI, mpes].
+- `eval.dataset_id`: the id of the dataset.
+- `seed_id`: the id of the random seeds. 
 
-Results will be saved under path `results/evaluation/{data.name}/{experiment.model}/{eval.dataset_id}/metric_{eval.seed_id}.pt`.
+Results will be saved at `results/evaluation/{data.name}/{experiment.model}/{eval.dataset_id}/metric_{eval.seed_id}.pt`.
 
 To test PBO on **hartmann6D function**: 
 ```bash
@@ -347,3 +344,15 @@ experiment.device=cpu
 eval.eval_max_T=100 
 data.name=sushi 
 ```
+
+# Acknowledgement
+This project refers to the following data preprocessing functions and baseline implementations:
+
+- HPOB data preprocessing from [NAP](https://github.com/huawei-noah/HEBO/tree/master/NAP) 
+- Sushi data processing from [qEUBO](https://github.com/facebookresearch/qEUBO/tree/21cd661efc25b242c9fdf5230f5828f01ff0872b).
+- MPES implementation from [qEUBO](https://github.com/facebookresearch/qEUBO/tree/21cd661efc25b242c9fdf5230f5828f01ff0872b).
+  
+The respective licenses for these repositories are as follows:
+
+- NAP: GNU APGL-3.0 License.
+- qEUBO: MIT License.

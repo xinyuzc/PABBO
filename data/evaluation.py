@@ -25,20 +25,20 @@ def generate_test_function_evaluation_task(
     num_initial_pairs: int = 1,
     p_noise: float = 0.0,
 ) -> Dict:
-    """Generate test function evaluation tasks.
+    """Generate initialization for preferential black-box optimization task from test functions.
 
     Args:
         num_seeds: the number of random seeds.
         test_x_range, List[d_x, 2]: the input range of test data.
-        train_x_range, List[d_x, 2]: the input range of PABBO pre-training.
+        train_x_range, List[d_x, 2]: the input range of pre-training data. Saved for future scaling.
         num_initial_pairs, int: number of initial pairs.
-        Xopt, (num_global_optima, d_x): the global optimum.
-        yopt, (num_global_optima, 1): associated utility values.
-        num_initial_pairs, int: number of initial pairs for each PBBO dataset.
-        p_noise, float: the observed noise when provding preference.
+        Xopt, (num_global_optima, d_x): the global optimum locations.
+        yopt, (num_global_optima, 1): global optimum values.
+        num_initial_pairs, int: number of initial pairs for each dataset.
+        p_noise, float: the observed noise when providing preference.
 
     Returns:
-        tasks, Dict: PBBO evaluation tasks generated from the test function.
+        tasks, Dict: PBBO evaluation intialization generated from the test function.
     """
     assert len(test_x_range) == len(train_x_range)
     assert len(test_x_range[0]) == len(train_x_range[0])
@@ -91,6 +91,20 @@ def generate_real_world_evaluation_task(
     num_initial_pairs: int = 1,
     p_noise: float = 0.0,
 ) -> Dict:
+    """Generate initialization for preferential black-box optimization task from real-world datasets.
+
+    Args:
+        num_seeds: the number of random seeds.
+        handler, Callable: datahandler for real-world dataset `candy` or `sushi`.
+        test_x_range, List[d_x, 2]: the input range of test data.
+        train_x_range, List[d_x, 2]: the input range of pre-training data. Saved for future scaling.
+        device, str: computational device, `cpu` or `cuda`.
+        num_initial_pairs, int: number of initial pairs.
+        p_noise, float: the observed noise when providing preference.
+
+    Returns:
+        tasks, Dict: PBBO evaluation intialization generated from real-world datasets.
+    """
     assert len(test_x_range) == len(train_x_range)
     assert len(test_x_range[0]) == len(train_x_range[0])
     tasks = {
@@ -140,7 +154,7 @@ def generate_gp_evaluation_task(
     p_noise: float = 0.0,
     device: str = "cuda",
 ) -> Dict:
-    """Generate evaluation tasks on GP samples with a global maximum.
+    """Generate initialization for preferential black-box optimization task from GP-based synthetic functions.
 
     Args:
         num_seeds: the number of random seeds.
@@ -158,7 +172,7 @@ def generate_gp_evaluation_task(
         p_noise, float: the observed noise when provding preference.
 
     Returns:
-        tasks, Dict: PBBO evaluation tasks generated from GPs.
+        tasks, Dict: PBBO evaluation intialization generated from GP-based synthetic functions.
     """
     assert len(test_x_range) == len(train_x_range)
     assert len(test_x_range[0]) == len(train_x_range[0])
@@ -246,6 +260,7 @@ def generate_hpob_evaluation_task(
     p_noise: float = 0.0,
     device: str = "cuda",
 ) -> Dict:
+    """Generate initialization for preferential black-box optimization task from GP-based synthetic functions."""
     handler = HPOBHandler(root_dir="datasets/hpob-data", mode="v3-test")
     X, y, Xopt, yopt = handler.sample(
         search_space_id=search_space_id,

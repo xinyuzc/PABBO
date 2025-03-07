@@ -18,13 +18,12 @@ class HPOBHandler:
         mode="v3-train-augmented",
     ):
         """Data handler for HPO-B tasks.
+        Adapted from NAP (GNU APGL-3.0 License)
+        Source: https://github.com/huawei-noah/HEBO/blob/master/NAP/HPOB_data/create_task_datasets.py
 
         Args:
             root_dir, str: where HPO-B benchmark data files are stored.
             mode, str: HPO-B benchmark provides 5 different modes: v1, v2, v3, v3-test, and v3-train-augmented.
-
-        Attrs:
-            seeds, list: 5 seeds for initialization during test time.
         """
         print("Loading HPO-B handler...")
         self.mode = mode
@@ -55,12 +54,12 @@ class HPOBHandler:
             augmented_train, bool: whether to load the augmented train data.
 
         Attrs:
-            meta_train_data:
-            meta_train_data_pred_idx:
-            meta_train_data_acq_idx:
-            meta_test_data:
-            meta_validation_data:
-            search_space_dims:
+            meta_train_data, dict: training dataset.
+            meta_train_data_pred_idx, dict: indices for the prediction task (split from `meta_train_data`).
+            meta_train_data_acq_idx, dict: indices for the acquisition task (split from `meta_train_data`).
+            meta_test_data, dict: test dataset.
+            meta_validation_data, dict: validation dataset.
+            search_space_dims, dict: dictionary mapping search spaces to their respective dimensionalities.
         """
 
         print("Loading data...")
@@ -103,16 +102,16 @@ class HPOBHandler:
             self.search_space_dims[search_space] = len(X)
 
     def random_split(self, data: Dict, split: float = 0.5) -> Tuple[Dict, Dict]:
-        """Randomly split `data` into two parts according to the ratio given by `split`.
+        """Randomly split `data` into two parts based on the given `split` ratio.
 
         Args:
-            data, Dict{"search_space_id": {"dataset_id": {"X": List, "y": List}}}.
-            ratio, float: the data partition.
+            data, Dict: dictionary structured as
+                {"search_space_id": {"dataset_id": {"X": List, "y": List}}}.
+            split, float: proportion of the data assigned to the first partition (default: 0.5).
 
         Returns:
-            pred_idx, Dict{"search_space_id": {"dataset_id": List}}
-            acq_idx, Dict{"search_space_id": {"dataset_id": List}}
-
+            pred_idx, Dict: dictionary mapping search space and dataset IDs to the first partition indices.
+            acq_idx, Dict: dictionary mapping search space and dataset IDs to the second partition indices.
         """
         print("Split each dataset into prediction and acquistion parts...")
         pred_idx, acq_idx = {}, {}
@@ -138,14 +137,7 @@ class HPOBHandler:
     def get_gp_on_task(
         self, split: str, search_space_id: int, task_id: int
     ) -> Tuple[SingleTaskGP, int]:
-        """Fit a GP on specified dataset on the specified search space.
-        Reference: https://github.com/huawei-noah/HEBO/tree/master/NAP
-
-        Returns:
-            model, SingleTaskGP: the fitted GP.
-            num_benchmark_points, int: the number of benchmark samples.
-        """
-        # find benchmark data points
+        """Fit a GP on a dataset."""
         split_dict = {
             "train": self.meta_train_data,
             "val": self.meta_validation_data,
@@ -155,12 +147,12 @@ class HPOBHandler:
         y = np.array(split_dict[split][search_space_id][task_id]["y"])
         std_y = MinMaxScaler().fit_transform(y)
 
-        # we save the GP
+        # save GP
         gp_name = f"{self.mode}_{search_space_id}_{task_id}_gp.pt"
         gp_model_path = os.path.join(self.root_dir, "gps", gp_name)
         if not os.path.exists(gp_model_path):
             print(
-                f"fit GP on dataset with dataset id {task_id} on space {search_space_id}, containing {X.shape[0]} points..."
+                f"fit GP on dataset {task_id} on space {search_space_id} with {X.shape[0]} points..."
             )
             normX = torch.from_numpy(X).to(dtype=torch.float64)
             std_y = torch.from_numpy(std_y).to(dtype=torch.float64)
@@ -174,12 +166,11 @@ class HPOBHandler:
             except (RuntimeError, botorch.exceptions.errors.ModelFittingError) as e:
                 print(e)
                 try:
-                    print("Try fit on GPU.")
                     mll.cuda()
                     _ = fit_gpytorch_mll_torch(mll)
                 except RuntimeError as e:
                     print(
-                        f"Error during the GP fit on search space {search_space_id}, dataset {task_id}."
+                        f"Error during fitting GP on search space {search_space_id}, dataset {task_id}."
                     )
                     print(e)
 
@@ -224,7 +215,6 @@ class HPOBHandler:
         # get GP
         model, xdim = self.get_gp_on_task(split, search_space_id, task_id)
 
-        # draw samples from the GP
         test_X = torch.rand(num_points, xdim)
         model = model.to(test_X)
         test_y = (
@@ -246,21 +236,21 @@ class HPOBHandler:
         train_split: str,
         standardize: bool = True,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """sample samples from a specified dataset on a specified search space.
+        """sample datapoints from a task (dataset) on a search space.
 
         Args:
             search_space_id, int: ID of search space.
-            batch_size, int: number of datasets to sample in specified search space. All datasets are returned if `batch_size` is larger than the total number.
-            num_points, int:  number of samples in each dataset. The entire dataset is returned if `num_points` is larger than dataset size.
+            batch_size, int: number of tasks to sample. All datasets are returned if `batch_size` is larger than the total number.
+            num_points, int:  number of datapoints in each dataset. The entire dataset is returned if `num_points` is larger than dataset size.
             standardize, bool: whether to standardize y.
-            split, str in ["train", "val", "test"]: sample training, validation, or test data.
-            train_split, str in ["pred", "acq"]: sample training data for prediction or acquisition tasks.
+            split, str: indicates the split ["train", "val", "test"] to sample from.
+            train_split, str: if sample from trainning set, indicates the split in ["pred", "acq"] to sample from.
 
         Returns:
-            X, (num_points, d_x): inputs for `num_points` samples.
-            y, (num_points, 1): corresponding function values.
-            Xopt, (1, d_x): input corresponding to the maximal function value.
-            yopt, (1, 1), : maximal function value from this sampled subset.
+            X, (num_points, d_x): datapoints.
+            y, (num_points, 1): utility values.
+            Xopt, (1, d_x): global optimum locations.
+            yopt, (1, 1), : global optimum values.
         """
         try:
             if split == "train":
@@ -323,18 +313,19 @@ class HPOBHandler:
         """sample a batch of data from specified search space.
 
         Args:
-            search_space_id, str: ID of search space.
-            batch_size, int: number of datasets to sample in specified search space. All datasets are returned if `batch_size` is larger than the total number.
-            num_total_points, int:  number of samples in each dataset. The entire dataset is returned if `num_points` is larger than dataset size.
+            search_space_id, int: ID of search space.
+            batch_size, int: number of tasks to sample. All datasets are returned if `batch_size` is larger than the total number.
+            num_points, int:  number of datapoints in each dataset. The entire dataset is returned if `num_points` is larger than dataset size.
             standardize, bool: whether to standardize y.
-            split, str in ["train", "val", "test"]: sample training, validation, or test data.
-            train_split, str in ["pred", "acq"]: sample training data for prediction or acquisition tasks.
+            split, str: indicates the split ["train", "val", "test"] to sample from.
+            train_split, str: if sample from trainning set, indicates the split in ["pred", "acq"] to sample from.
+            device, str: computational device in ["cpu", "cuda"].
 
         Returns:
-            X, (batch_size, num_points, d_x): sampled points.
-            y, (batch_size, num_points, 1): associated utility values.
-            Xopt, (batch_size, 1, d_x): optimum location.
-            yopt, (batch_size, 1, 1), : optimum.
+            X, (batch_size, num_points, d_x): datapoints.
+            y, (batch_size, num_points, 1): utility values.
+            Xopt, (batch_size, 1, d_x): global optimum locations.
+            yopt, (batch_size, 1, 1), : global optimum values.
         """
         if split not in ["train", "val", "test"]:
             raise ValueError("Provide a valid data split.")

@@ -13,16 +13,16 @@ def sample_random_pairs_from_Q(
     """sample random query pairs from the candidate query pair set Q.
 
     Args:
-        pair, (B, num_query_pair, 2 d_x): pair set.
-        pair_y, (B, num_query_pair, 2): corresponding function values.
-        c, (B, num_query_pair, 1): corresponding preference.
-        num_samples, int: number of samples
+        pair, (B, num_query_pair, 2 * d_x): the pairs in the candidate query pair set.
+        pair_y, (B, num_query_pair, 2): associated utility values in pairs.
+        c, (B, num_query_pair, 1): associated preference for pairs.
+        num_samples, int: number of pairs to sample.
 
     Returns:
-        sample_pair, (B, num_samples, 2 d_x): sampled pairs.
+        sample_pair, (B, num_samples, 2 * d_x): sampled pairs.
         sample_pair_y, (B, num_samples, 2): associated utility values.
         sample_c, (B, num_samples, 1): associated preference.
-        idx, (num_samples): the indices of sampled pair.
+        idx, (num_samples): the indices of samples in the candidate query pair set.
     """
     idx = np.random.choice(a=len(pair), size=(num_samples), replace=False)
 
@@ -131,10 +131,10 @@ def generate_query_pair_set(
         rank_latent_value, bool: whether to replace the true latent value with its ranking in the pair set.
 
     Returns:
-        pair_idx, (num_pair, 2): the point indices of pairs. Shared between dataset in batches.
-        pair, (B, num_pair, 2 * d_x): the pairs.
-        pair_y, (B, num_pair, 2): the associated utility values of pairs
-        c, (B, num_pair, 1): the preference label of pairs.
+        pair_idx, (num_pair, 2): the datapoints indices of pairs that shared within batch. pair_idx[i] = (m, n) indicates that the i-th pair consists of datapoint X[:, m] and X[:, n].
+        pair, (B, num_pair, 2 * d_x): pairs of datapoints.
+        pair_y, (B, num_pair, 2): associated utility values.
+        c, (B, num_pair, 1): preference.
     """
     # sample the indices of sampled pairs.
     # NOTE the pair set for a curve is fixed. Random seeds only control starting pairs.

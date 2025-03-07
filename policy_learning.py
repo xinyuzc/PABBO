@@ -116,8 +116,8 @@ def finish_episode(
         eps: to avoid divide-by-zero issue.
 
     Returns:
-        mean loss, (1)
-        mean entropy, (1)
+        mean loss, (1): loss averaged across batch dim.
+        mean entropy, (1): entropy averaged across batch dim.
     """
     entropy = torch.stack(entropys, dim=-1)  # (B, H)
     reward = torch.stack(rewards, dim=-1)  # (B, H)
@@ -152,7 +152,7 @@ def get_reward(
         reward_option, list in ["simple_regret", "inference_regret"].
 
     Returns:
-        reward, (B, ):
+        reward, (B, ): reward for each trajectory in the batch.
     """
     if regret_option == "simple_regret":
         best_y = torch.max(

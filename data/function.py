@@ -129,7 +129,7 @@ def levy6D(x: torch.Tensor, negate: bool = True, add_dim: bool = True):
 
 
 def rosenbrock6D(x: torch.Tensor, negate: bool = True, add_dim: bool = True):
-    """levy synthetic test function.
+    """rosenbrock synthetic test function.
 
     Args:
         x, (B, N, 6)

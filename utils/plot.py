@@ -2,8 +2,6 @@ import torch
 import numpy as np
 from typing import Union, Callable, List
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import matplotlib.colors as mcolors
 
 
 def confidence_interval(value: np.ndarray):
@@ -18,8 +16,11 @@ def center_scale(data: np.ndarray, t_range: np.ndarray):
     """Center and scale data to target range.
 
     Args:
-        x, (N, d_x)
-        t_range, (d_x, 2)
+        x, (N, d_x): original data.
+        t_range, (d_x, 2): target data range.
+
+    Returns:
+        data_scaled, (N, d_x): scaled data.
     """
     data_std = (data - data.min(axis=0)) / (data.max(axis=0) - data.min(axis=0))
     data_scaled = data_std * (t_range[..., 1] - t_range[..., 0]) + t_range[..., 0]
@@ -455,7 +456,7 @@ def plot_metric_along_trajectory(
         "PABBO1024": "deeppink",
         "PABBO256_5": "yellow",
         "PABBO": "violet",
-        "PABBO_synthetic": "fuchsia", 
+        "PABBO_synthetic": "fuchsia",
         "qTS": "blue",
         "qEUBO": "orange",
         "qEI": "green",

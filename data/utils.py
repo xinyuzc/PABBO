@@ -135,9 +135,9 @@ class My1DInterpolator:
         """1-dimensional interpolator.
 
         Attrs:
-            X, (N, 1)
-            y, (N, 1)
-            interpolator_type, str in ["nearest", "linear"]
+            X, (N, 1): datapoints.
+            y, (N, 1): utility values.
+            interpolator_type, str: interpolation type in ["nearest", "linear"]
         """
         assert X.shape[-1] == 1
         assert y.shape[-1] == 1
@@ -212,12 +212,7 @@ def LND_fill_oob_with_nn(
 
 class MyNDInterpolator:
     def __init__(self, X, y, interpolator_type: str = "nearest"):
-        """n-dimensional interpolator.
-        Args:
-            X, (N, d_x)
-            y, (N, 1)
-            interpolator_type, str in ["nearest", "linear"]. Out-of-distribution values are always filled with the nearest values.
-        """
+        """n-dimensional interpolator"""
         if X.shape[-1] < 2:
             raise ValueError
         self.X, self.y = X, y
@@ -233,10 +228,10 @@ class MyNDInterpolator:
         """Interpolote at points xx.
 
         Args:
-            xx, (..., d_x)
+            xx, (..., d_x): the locations to predict.
 
         Returns:
-            yy, (..., 1)
+            yy, (..., 1): predicted values.
         """
         to_tensor = False
         if isinstance(xx, torch.Tensor):
