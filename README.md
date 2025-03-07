@@ -60,7 +60,7 @@ train.n_random_pairs=300
 To train PABBO on **6-dimensional GP-based samples**:
 ```bash
 python train.py --config-name=train  \
-experiment.expid=PABBO_GP6D_st \
+experiment.expid=PABBO_GP6D \
 data.name=GP6D \
 data.d_x=6 \
 data.x_range="[[-1, 1],[-1, 1],[-1, 1],[-1, 1],[-1, 1],[-1, 1]]" \
@@ -344,6 +344,9 @@ experiment.device=cpu
 eval.eval_max_T=100 
 data.name=sushi 
 ```
+
+# License 
+This code is released under the APGL-3.0 license. 
 
 # Acknowledgement
 This project refers to the following data preprocessing functions and baseline implementations:
