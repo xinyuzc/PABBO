@@ -154,10 +154,10 @@ def train(config: DictConfig, model: TransformerModel):
                     evaluate=False,
                 )
 
-                X_pred = X[:, : -config.train.num_prediction_points]
-                y_pred = y[:, : -config.train.num_prediction_points]
-                X_ac = X[:, -config.train.num_prediction_points :]
-                y_ac = y[:, -config.train.num_prediction_points :]
+                X_pred = X[:, : -config.train.num_query_points]
+                y_pred = y[:, : -config.train.num_query_points]
+                X_ac = X[:, -config.train.num_query_points :]
+                y_ac = y[:, -config.train.num_query_points :]
             else:
                 # for HPOB, sample prediction and query dataset from non-overlapping splits
                 X_pred, y_pred, _, _ = sampler.sample(
@@ -191,8 +191,8 @@ def train(config: DictConfig, model: TransformerModel):
             query_pair_idx, query_pair, query_pair_y, query_c = generate_query_pair_set(
                 X=X_ac,
                 y=y_ac,
-                num_total_points=config.train.num_prediction_points,
-                n_random_pairs=config.train.num_prediction_points,
+                num_total_points=config.train.num_query_points,
+                n_random_pairs=config.train.n_random_pairs,
                 p_noise=config.train.p_noise,
                 ranking_reward=config.train.ranking_reward,
             )
@@ -325,7 +325,7 @@ def train(config: DictConfig, model: TransformerModel):
                 entropys.append(entropy)
 
         # averaged BCE loss
-        cls_loss = cls_losses / (config.train.max_T + 1)
+        cls_loss = cls_losses / config.train.max_T
 
         # compute the policy learning loss given trajectories information
         if epoch > config.train.n_burnin:

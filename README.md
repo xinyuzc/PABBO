@@ -1,5 +1,5 @@
 # Overview
-This is the code repository for paper PABBO: Preferential Amortized Black-Box Optimization accepted to ICLR 2025 by Xinyu Zhang, Daolang Huang, Samuel Kaski, and Julien Martinelli. 
+This is the code repository for paper *PABBO: Preferential Amortized Black-Box Optimization* accepted to ICLR 2025 by Xinyu Zhang, Daolang Huang, Samuel Kaski, and Julien Martinelli. The paper can be found [here](https://arxiv.org/abs/2503.00924).
 
 # Setup 
 1. Install dependencies using the requirements.txt: 
@@ -335,16 +335,28 @@ eval.eval_max_T=60
 ```
 To test PBO on **sushi**
 ```bash
-python baseline.py --config-name=evaluate 
-eval.dataset_id=0 
-eval.seed_id=0 
-experiment.wandb=false 
-experiment.model=rs 
-experiment.device=cpu 
-eval.eval_max_T=100 
+python baseline.py --config-name=evaluate \
+eval.dataset_id=0 \
+eval.seed_id=0 \
+experiment.wandb=false \
+experiment.model=rs \
+experiment.device=cpu \
+eval.eval_max_T=100 \
 data.name=sushi 
 ```
 
+# Citation 
+```
+@misc{zhang2025pabbopreferentialamortizedblackbox,
+      title={PABBO: Preferential Amortized Black-Box Optimization}, 
+      author={Xinyu Zhang and Daolang Huang and Samuel Kaski and Julien Martinelli},
+      year={2025},
+      eprint={2503.00924},
+      archivePrefix={arXiv},
+      primaryClass={stat.ML},
+      url={https://arxiv.org/abs/2503.00924}, 
+}
+```
 # License 
 This code is released under the APGL-3.0 license. 
 

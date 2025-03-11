@@ -24,7 +24,7 @@ def sample_random_pairs_from_Q(
         sample_c, (B, num_samples, 1): associated preference.
         idx, (num_samples): the indices of samples in the candidate query pair set.
     """
-    idx = np.random.choice(a=len(pair), size=(num_samples), replace=False)
+    idx = np.random.choice(a=pair.shape[1], size=(num_samples), replace=False)
 
     sample_pair = pair[:, idx]  # (B, num_samples, 2 d_x)
     sample_pair_y = pair_y[:, idx]  # (B, num_samples, 2)

@@ -34,8 +34,7 @@ def sample_from_masked_categorical(
     if argmax:
         # manually fill masked logits with negative inf values
         masked_logits = logits.masked_fill(~mask, float("-inf"))
-        max_indices = masked_logits.argmax(dim=-1)  # (B)
-        action = masked_logits.gather(1, max_indices.unsqueeze(-1)).squeeze(-1)
+        action = masked_logits.argmax(dim=-1)  # (B)
     else:
         # sample from the masked distribution
         action = m.sample()
