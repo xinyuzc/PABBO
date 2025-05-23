@@ -15,8 +15,7 @@ This is the code repository for paper *PABBO: Preferential Amortized Black-Box O
    2. Sushi: `datasets/sushi-data/sushi3.idata`, `datasets/sushi-data/sushi3b.5000.10.score`
    3. HPOB: `datasets/hpob-data/meta-test-dataset.json`, `datasets/hpob-data/meta-validation-dataset.json`, `datasets/hpob-data/meta-train-dataset-augmented.json`
 # Training 
-The default configuration is saved at `configs/evaluate.yaml`. You can modify the settings there or directly pass arguments. Note that the data configuration needs to be provided. The training script is located in `train.py`. Checkpoints will be saved under `results/evaluation/PABBO/{experiment.expid}`.
-
+The default configuration is saved at `configs/train.yaml`. You can modify the settings there or directly pass arguments. Note that the data configuration needs to be provided. The training script is located in `train.py`. Checkpoints will be saved under `results/evaluation/PABBO/{experiment.expid}`.
 
 To train PABBO on **1-dimensional GP-based samples**: 
 ```bash
@@ -131,7 +130,7 @@ train.num_prediction_points=300 \
 train.n_random_pairs=300 
 ```
 # Testing 
-The default configuration is saved at `configs/evaluate.yaml`. You can modify the settings there or directly pass arguments. Note that the data configuration needs to be provided. The evaluation script on continuous search space is located in `evaluation_continuous.py`; the script for discrete input is located in `evaluation_discret.py`. Results will be saved under `results/evaluation/{data.name}/PABBO/{experiment.expid}`.
+The default configuration is saved at `configs/evaluate.yaml`. You can modify the settings there or directly pass arguments. Note that the data configuration needs to be provided. The evaluation script on continuous search space is located in `evaluation_continuous.py`; the script for discrete input is located in `evaluation_discrete.py`. Results will be saved under `results/evaluation/{data.name}/PABBO/{experiment.expid}`.
 
 To test PABBO on **1-dimensional GP-based samples**:
 

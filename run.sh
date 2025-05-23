@@ -1,6 +1,6 @@
 #!/bin/bash -l
-#SBATCH --output=train_%A.out
-#SBATCH --mem=3G
+#SBATCH --output=outputs/train_%A.out
+#SBATCH --mem=6G
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:4
 #SBATCH --time=25:00:00

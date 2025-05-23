@@ -13,7 +13,7 @@ from policies.transformer import TransformerModel
 from data.utils import set_all_seeds
 from data.kernel import *
 from data.utils import scale_from_domain_1_to_domain_2
-from data.environment import generate_query_pair_set
+from data.environment import generate_pair_set
 from data.evaluation import *
 from policy_learning import *
 from utils.losses import kendalltau_correlation
@@ -230,7 +230,7 @@ def evaluate_on_a_discrete_dataset(
         bound1=test_x_range,
         bound2=train_x_range,
     )
-    query_pair_idx, query_pair, query_pair_y, query_c = generate_query_pair_set(
+    query_pair_idx, query_pair, query_pair_y, query_c = generate_pair_set(
         X=X_pending,
         y=y_pending,
         num_total_points=num_query_points,
@@ -386,8 +386,7 @@ def evaluate(config: DictConfig, model: TransformerModel):
             f"Loading PBBO evaluation task for {config.data.name} from {str(datapath)}..."
         )
         eval_task = torch.load(
-            datapath,
-            map_location=config.experiment.device,
+            datapath, map_location=config.experiment.device, weights_only=False
         )
     TEST_X_RANGE = torch.tensor(eval_task["test_x_range"])
     TRAIN_X_RANGE = torch.tensor(eval_task["train_x_range"])

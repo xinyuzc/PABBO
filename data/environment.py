@@ -1,38 +1,39 @@
 import torch
+from torch import Tensor
 import numpy as np
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional
 from data.utils import sample_from_full_combination
 
 
 def sample_random_pairs_from_Q(
-    pair: torch.Tensor,
-    pair_y: torch.Tensor,
-    c: torch.Tensor,
+    pair: Tensor,
+    pair_y: Tensor,
+    c: Tensor,
     num_samples: int,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """sample random query pairs from the candidate query pair set Q.
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    """sample random pairs from the candidate query pair set Q.
 
     Args:
-        pair, (B, num_query_pair, 2 * d_x): the pairs in the candidate query pair set.
-        pair_y, (B, num_query_pair, 2): associated utility values in pairs.
-        c, (B, num_query_pair, 1): associated preference for pairs.
-        num_samples, int: number of pairs to sample.
+        pair, [B, num_pairs, 2 * d_x]: candidate query pair set Q.
+        pair_y, [B, num_pairs, 2]: associated utility values.
+        c, [B, num_pairs, 1]: associated preference.
+        num_samples, scalar: number of samples.
 
     Returns:
-        sample_pair, (B, num_samples, 2 * d_x): sampled pairs.
-        sample_pair_y, (B, num_samples, 2): associated utility values.
-        sample_c, (B, num_samples, 1): associated preference.
-        idx, (num_samples): the indices of samples in the candidate query pair set.
+        sample_pair, [B, num_samples, 2 * d_x]: sampled pairs.
+        sample_pair_y, [B, num_samples, 2]: associated utility values.
+        sample_c, [B, num_samples, 1]: preference for sampled pairs.
+        idx, [num_samples]: indices of sampled pairs - shared across batch.
     """
     idx = np.random.choice(a=pair.shape[1], size=(num_samples), replace=False)
 
-    sample_pair = pair[:, idx]  # (B, num_samples, 2 d_x)
-    sample_pair_y = pair_y[:, idx]  # (B, num_samples, 2)
-    sample_c = c[:, idx]  # (B, num_samples, 1)
+    sample_pair = pair[:, idx]
+    sample_pair_y = pair_y[:, idx]
+    sample_c = c[:, idx]
     return sample_pair, sample_pair_y, sample_c, idx
 
 
-def gather_data_at_index(data: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+def gather_data_at_index(data: Tensor, idx: Tensor) -> Tensor:
     """Gather elements along the sequence dimension.
 
     Args:
@@ -50,20 +51,24 @@ def gather_data_at_index(data: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
 
 
 def get_user_preference(
-    pair_y: torch.Tensor, maximize: bool = True, p_noise: Union[float, None] = None
-) -> torch.Tensor:
-    """generates preference label given a pair of function values.
+    pair_y: Tensor, maximize: bool = True, p_noise: Optional[float] = None
+) -> Tensor:
+    """Generate user preference for sampled pairs based on the utility values.
 
     Args:
-        pairs_y, [..., 2]: function values for pairs.
-        maximize, bool: maximize or minimize the utility function. default True.
-        p_noise, float: observed Gaussian noise when deciding preference. Default as 0.1
+        pair_y, [B, num_pairs, 2]: utility values for sampled pairs.
+        maximize, bool: the point with larger utility value is preferred if true.
+        p_noise, float: observed noise when giving preference.
 
     Returns:
-        c, [..., 1]: the preference label.
+        c, [B, num_pairs, 1]: preference for sampled pairs.
+        Preference is 0 if element 0 is preferred, and 1 if element 1 is preferred.
     """
+    # add gaussian noise to the utility values
     p_noise = p_noise if p_noise is not None else 0.1
     pair_y_obs = pair_y + p_noise * torch.randn_like(pair_y, device=pair_y.device)
+
+    # [B, num_pairs] -> [B, num_pairs, 1]
     c = (
         (pair_y_obs[..., 0] - pair_y_obs[..., 1] <= 0).float()
         if maximize
@@ -73,9 +78,10 @@ def get_user_preference(
 
 
 def get_ranking_reward(
-    y: torch.Tensor,
-    pair_idx: torch.Tensor,
-) -> torch.Tensor:
+    y: Tensor,
+    pair_idx: Tensor,
+    maximize: bool = True,  # dummy - default maximize!
+) -> Tensor:
     """Get reward based on the ranking of utility values: the larger the utility value, the higher the reward.
     For instance, y = [[[0.1], [0.3], [0.4]]], pair_idx=[[1, 2]], then return y=[[0.1], [0], [1]].
 
@@ -99,8 +105,10 @@ def get_ranking_reward(
     # (B, M, 1), indices that sort the unique utility values in ascending order. i.e., (y_{i,1} < y_{i,2} < ...)
     indices = torch.argsort(unique_y_Q, dim=1)
 
-    # from 1 to M: reward=1 for the smallest utility value.
-    reward_array = torch.tile(torch.arange(M).reshape(1, M, 1), (B, 1, 1))
+    # from 1 to M: reward = 1 for the smallest utility value, 2 for the second smallest, and so on.
+    # [1, M, 1] -> [B, M, 1]
+    reward_array = torch.arange(M).unsqueeze(0).unsqueeze(2).to(y)
+    reward_array = reward_array.expand(B, M, 1)
 
     # scatter rewards according to the sorted indices
     reward_y = torch.zeros((B, M, 1), dtype=torch.int64)
@@ -112,43 +120,45 @@ def get_ranking_reward(
     return y
 
 
-def generate_query_pair_set(
-    X: torch.Tensor,
-    y: torch.Tensor,
+def generate_pair_set(
+    X: Tensor,  # [B, num_datapoints, d_x]
+    y: Tensor,  # [B, num_datapoints, 1]
     num_total_points: int,
     n_random_pairs: Union[None, int] = None,
     maximize: bool = True,
     p_noise: float = 0.0,
     ranking_reward: bool = False,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Generate a set of pairs with preference labels by combining given datapoints.
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Generate a set of pairs from the batch of datapoints.
 
     Args:
-        X, (B, num_points, d_x): a batch of datapoints.
-        y, (B, num_points, 1): associated utility values.
+        X, [B, num_points, d_x]: a batch of datapoints.
+        y, [B, num_points, 1]: associated utility values.
         maximize, bool: the point with larger utility value is preferred if true.
         p_noise, float: observed noise when giving preference.
-        rank_latent_value, bool: whether to replace the true latent value with its ranking in the pair set.
+        ranking_reward, bool: whether to replace the true latent value with its ranking in the pair set.
 
     Returns:
-        pair_idx, (num_pair, 2): the datapoints indices of pairs that shared within batch. pair_idx[i] = (m, n) indicates that the i-th pair consists of datapoint X[:, m] and X[:, n].
-        pair, (B, num_pair, 2 * d_x): pairs of datapoints.
-        pair_y, (B, num_pair, 2): associated utility values.
-        c, (B, num_pair, 1): preference.
+        pair_idx, [num_pairs, 2]: indices of sampled pairs.
+        pair, [B, num_pairs, 2 * d_x]: sampled pairs.
+        pair_y, [B, num_pairs, 2]: associated utility values.
+        c, [B, num_pairs, 1]: preference for sampled pairs.
     """
-    # sample the indices of sampled pairs.
-    # NOTE the pair set for a curve is fixed. Random seeds only control starting pairs.
+    # sample indices of pairs from the full combination of datapoints
     pair_idx = sample_from_full_combination(
         num_total_points=num_total_points,
         num_random_pairs=n_random_pairs,
         device=X.device,
     )
 
-    # ablation study on reward model: substitute the true latent values with the ranking
+    # ablation study on reward model: replace the true latent utility values with the ranking in the query pair set
     if ranking_reward:
         y = get_ranking_reward(y=y, pair_idx=pair_idx)
 
+    # gather the sampled pairs and their associated utility values: [B, num_pairs, 2 * d_x] and [B, num_pairs, 2]
     pair = X[:, pair_idx].float().flatten(start_dim=-2)
     pair_y = y[:, pair_idx].float().flatten(start_dim=-2)
+
+    # get the preference for sampled pairs
     c = get_user_preference(pair_y=pair_y, maximize=maximize, p_noise=p_noise)
     return pair_idx, pair, pair_y, c

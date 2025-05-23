@@ -198,7 +198,7 @@ class HPOBHandler:
                 torch.cuda.empty_cache()
 
         else:
-            model = torch.load(gp_model_path)
+            model = torch.load(gp_model_path, weights_only=False)
             model.eval()
 
         return model, X.shape[1]

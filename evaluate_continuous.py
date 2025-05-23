@@ -15,7 +15,7 @@ from data.utils import set_all_seeds
 from data.sampler import SimpleGPSampler, OptimizationFunction, UtilitySampler
 from data.kernel import *
 from data.utils import scale_from_domain_1_to_domain_2
-from data.environment import generate_query_pair_set
+from data.environment import generate_pair_set
 from data.evaluation import *
 from data.candy_data_handler import *
 from data.sushi_data_handler import *
@@ -81,8 +81,7 @@ def main(config: DictConfig):
                 f"Loading PBBO evaluation task for {config.data.name} from {str(datapath)}..."
             )
             eval_task = torch.load(
-                datapath,
-                map_location=config.experiment.device,
+                datapath, map_location=config.experiment.device, weights_only=False
             )
 
         # build utilities
@@ -159,8 +158,7 @@ def main(config: DictConfig):
                 f"Loading PBBO evaluation task for {config.data.name} from {str(datapath)}..."
             )
             eval_task = torch.load(
-                datapath,
-                map_location=config.experiment.device,
+                datapath, map_location=config.experiment.device, weights_only=False
             )
         NUM_SEEDS = eval_task["num_seeds"]
         B = eval_task["num_datasets"]
@@ -439,7 +437,7 @@ def evaluate_on_a_utility(
         bound2=train_x_range,
     )
     # create candidate query pair set as the combination of any two points from Q
-    query_pair_idx, query_pair, query_pair_y, query_c = generate_query_pair_set(
+    query_pair_idx, query_pair, query_pair_y, query_c = generate_pair_set(
         X=X,
         y=y,
         num_total_points=num_query_points,

@@ -1,6 +1,5 @@
 defaults:
   - hydra: default  
-  - wandb_cfg@wandb: default
   - _self_
   - override hydra/hydra_logging: none  
   - override hydra/job_logging: none  
@@ -27,6 +26,7 @@ data:
 
 
 wandb: 
+  project: PABBO
   name: ${experiment.expid}
   group: ${experiment.model}
   job_type: debug

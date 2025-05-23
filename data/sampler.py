@@ -20,9 +20,9 @@ def transform_with_global_optimum(
     f_offset: torch.Tensor,
     maximize: bool = True,
 ):
-    """transform utility values to ensure a global optimum at xopt.
-    Specifically - a global maximum (-f_offset) if maximize=True,
-    or a global minimum f_offset otherwise.
+    """transform utility values to ensure a global optima at xopt.
+    the global maximum = - f_offset if maximize=True,
+    otherwise the global minimum = f_offset.
 
     Args:
         x_range, (d_x, 2): data range of each input dimension.
@@ -302,18 +302,20 @@ class UtilitySampler(object):
         assert x_range.shape[0] == self.d_x
         # quasi-random samples over input space
         if sobol_grid:
-            x = (
-                torch.tensor(
-                    create_sobol_grid(
-                        d_x=self.d_x,
-                        x_range=x_range,
-                        num=num_total_points,
-                    )
+            # [num_total_points, d_x]
+            x = torch.tensor(
+                create_sobol_grid(
+                    d_x=self.d_x,
+                    x_range=x_range,
+                    num=num_total_points,
                 )
-                .to(dtype=torch.float32)[None, :, :]
-                .tile(batch_size, 1, 1)
-            )
-            x = x[:, torch.randperm(num_total_points)]  # NOTE
+            ).float()
+
+            # add batch dim: [batch_size, num_total_points, d_x]
+            x = x.unsqueeze(0).expand(batch_size, -1, -1)
+
+            # randomly permute the grid points
+            x = x[:, torch.randperm(num_total_points)]  
         else:  # randomly sample from uniform
             x = x_range[:, 0] + (x_range[:, 1] - x_range[:, 0]) * torch.rand(
                 [batch_size, num_total_points, self.d_x]
@@ -321,11 +323,15 @@ class UtilitySampler(object):
         y = self.utility_function(x.reshape(-1, self.d_x)).reshape(
             batch_size, num_total_points, -1
         )
+
+        # add batch dim for optimum
+        Xopt = self.Xopt.unsqueeze(0).expand(batch_size, -1, -1).to(x)
+        yopt = self.yopt.unsqueeze(0).expand(batch_size, -1, -1).to(x)
         return (
             x,
             y,
-            self.Xopt[None, :, :].tile(batch_size, 1, 1).to(x.device),
-            self.yopt[None, :, :].tile(batch_size, 1, 1).to(x.device),
+            Xopt, 
+            yopt
         )
 
 
@@ -342,19 +348,20 @@ class OptimizationSampler(object):
         device: str = "cuda",
         **kwargs,
     ) -> None:
-        """sampler for GP sample-based functions with global optimum structure.
+        """Sampler for GP-based functions with global optimum structure.
 
         Args:
-            kernel_list, list: the list of kernels.
-            sample_kernel_weights, list: the probabilities of each kernel type being used.
-            lengthscale_range: parameterize lengthscale distribution.
-            std_range: parameterize std distribution.
+            kernel_list: list of kernel functions.
+            sample_kernel_weights: weights for sampling kernel functions.
+            lengthscale_range: parameterize lengthscale.
+            std_range: parameterize standard deviation.
             p_iso, float: probability of isotropic lengthscale.
-            maximize, bool: whether to create maximum or minimum. Default true.
+            maximize, bool: whether to create function with global maximum or minimum.
             seed, int: random seed.
-            device: default cuda.
+            device: device to use. Default as "cuda".
         """
         self.seed = seed
+
         if seed is not None:
             torch.manual_seed(seed)
             torch.cuda.manual_seed(seed)
@@ -369,12 +376,19 @@ class OptimizationSampler(object):
         if isinstance(kernel_list[0], str):
             self.kernel_list = []
             for k in kernel_list:
-                if k in globals():  # we have import functions in data.kernel
-                    self.kernel_list.append(globals()[k])
+                if k == "rbf":
+                    self.kernel_list.append(rbf)
+                elif k == "matern52":
+                    self.kernel_list.append(matern52)
+                elif k == "matern32":
+                    self.kernel_list.append(matern32)
+                elif k == "matern12":
+                    self.kernel_list.append(matern12)
                 else:
                     raise ValueError(f"kernel function `{k}` is not supported.")
         else:
             self.kernel_list = kernel_list
+
         self.sample_kernel_weights = sample_kernel_weights
         self.lengthscale_range = lengthscale_range
         self.std_range = std_range
@@ -390,12 +404,12 @@ class OptimizationSampler(object):
         batch_size: int = 64,
         max_num_ctx_points: int = 128,
         num_total_points: int = 256,
-        x_range: List[List[float]] = [[-1, 1]],
+        x_range: List[List[float]] = [[-1.0, 1.0]],
         sobol_grid: bool = True,
         evaluate: bool = False,
         **kwargs,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """sample points from a batch of functions.
+        """sample a batch of datapoints from GP-based functions with global optimum structure.
 
         Args:
             batch_size, int: the size of data batch.
@@ -514,7 +528,7 @@ class OptimizationSampler(object):
             )
             .int()
             .item()
-        )  # scalar
+        )
         temp_mean = torch.zeros(size=(n_temp,))
         temp_stds = torch.full(size=(n_temp,), fill_value=sigma_f.item())
         # sample `n_temp` means from a zero-mean Normal distribution with function standard deviation.
@@ -542,7 +556,7 @@ class OptimizationSampler(object):
             x_fix = x_tmp[: num_ctx_points - 1]
             x_ind = x_tmp[num_ctx_points - 1 :]
         else:
-            # sampled quasi-random samples
+            # sampled quasi-random samples from a sufficiently dense grid
             if sobol_grid:
                 x_tmp = torch.tensor(
                     create_sobol_grid(
@@ -552,7 +566,10 @@ class OptimizationSampler(object):
                     ),
                     device=self.device,
                 ).to(dtype=torch.float32)
+
+                # randomly permute the grid points
                 perm_idx = torch.randperm(GRID_SIZE)
+
                 x_fix = x_tmp[perm_idx[: num_ctx_points - 1]]
                 x_ind = x_tmp[perm_idx[num_ctx_points:num_total_points]]
             else:

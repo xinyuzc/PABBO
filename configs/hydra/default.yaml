@@ -1,11 +1,6 @@
 output_subdir: null  
 run:  
   dir: .
-sweep:
-  dir: ./outputs/${now:%Y%m%d_%H%M%S}
-  subdir: ${hydra.job.num}_${hydra.job.id}
 job: 
-  chdir: true # automatically change to the working directory
+  chdir: false # working directory remain unchanged
 verbose: [__main__] 
-
-  

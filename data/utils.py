@@ -1,8 +1,9 @@
 import torch
+from torch import Tensor
 import numpy as np
 import random
 import sobol_seq
-from typing import List, Union, Tuple, Dict
+from typing import List, Union, Tuple, Optional
 from scipy.interpolate import LinearNDInterpolator as LND
 from scipy.interpolate import NearestNDInterpolator as NND
 from scipy import interpolate
@@ -16,15 +17,15 @@ def set_all_seeds(seed):
 
 
 def scale_from_domain_1_to_domain_2(
-    x: torch.Tensor,
-    bound1: torch.Tensor,
-    bound2: torch.Tensor,
-) -> torch.Tensor:
+    x: Tensor,
+    bound1: Tensor,
+    bound2: Tensor,
+) -> Tensor:
     tmp = (x - bound1[..., 0]) / (bound1[..., 1] - bound1[..., 0])
     return bound2[..., 0] + tmp * (bound2[..., 1] - bound2[..., 0])
 
 
-def scale_from_unit_to_domain(X: torch.Tensor, bound: torch.Tensor) -> torch.Tensor:
+def scale_from_unit_to_domain(X: Tensor, bound: Tensor) -> Tensor:
     return bound[..., 0] + X * (bound[..., 1] - bound[..., 0])
 
 
@@ -49,30 +50,36 @@ def create_sobol_grid(d_x: int, num: int, x_range: List[List[float]] = [[0.0, 1.
 
 
 def sample_from_full_combination(
-    num_total_points: int,
-    device: torch.device,
-    num_random_pairs: Union[None, int] = None,
-) -> torch.Tensor:
-    """sample pairs from the full combinations of points.
+    num_total_points: int, device: torch.device, num_random_pairs: Optional[int] = None
+) -> Tensor:  # [M, 2]
+    """sample random pairs from the full combinations of num_total_points.
 
     Args:
-        num_total_points, scalar: number of points.
-        num_random_pairs, scalar: number of sampled pairs. If None, full combination is returned.
+        num_total_points, scalar: number of points
+        num_random_pairs, scalar: optional number of sampled pairs. If not provided, all pairs from the full combinations are sampled.
 
     Returns:
-        pair_idx, [M, 2]: indices for sampled pairs.
+        pair_idx, [num_random_pairs, 2]: indices for sampled pairs.
     """
     num_total_pairs = num_total_points * (num_total_points - 1) // 2
 
-    # sample a subset
-    if num_random_pairs is not None and (num_random_pairs < num_total_pairs):
+    num_random_pairs = (
+        num_random_pairs if num_random_pairs is not None else num_total_pairs
+    )
+
+    assert (
+        num_random_pairs <= num_total_pairs
+    ), f"num_random_pairs {num_random_pairs} should be smaller than num_total_pairs {num_total_pairs}."
+
+    # sample a subset of pairs from the full combinations
+    if num_random_pairs < num_total_pairs:
         pair_idx, _ = get_combinations_subset(
             num_query_points=num_total_points,
             num_random_pairs=num_random_pairs,
             device=device,
         )
     else:
-        # the full combination
+        # full combination
         pair_idx = torch.combinations(torch.arange(0, num_total_points))
     return pair_idx
 
@@ -81,36 +88,44 @@ def get_combinations_subset(
     device: torch.device,
     num_query_points: int,
     num_random_pairs: int,
-) -> Tuple[torch.Tensor, int]:
-    """Sample a subset of the full combinations.
+) -> Tuple[Tensor, int]:
+    """Sample a subset of pairs from the full combinations of num_query_points.
 
     Args:
         num_total_points, scalar: number of points.
-        num_random_pairs, scalar: number of sampled pairs. If None, all pairs from the full combinations are sampled.
+        num_random_pairs, scalar: number of sampled pairs.
 
     Returns:
         subset_pair_idx, [M, 2]: indices for sampled pairs.
-        scalar, number of sampled pairs.
+        num_subset_pairs, scalar: number of sampled pairs.
     """
     subset_pair_idx = []
     while len(subset_pair_idx) < num_random_pairs:
-        idx = list(
-            sorted(random.sample(range(num_query_points), 2))
-        )  # NOTE sort the combination
+        # NOTE sort the combination 
+        idx = list(sorted(random.sample(range(num_query_points), 2)))
         if idx not in subset_pair_idx:
             subset_pair_idx.append(idx)
+
     subset_pair_idx = torch.tensor(subset_pair_idx, dtype=torch.int64, device=device)
-    return subset_pair_idx, len(subset_pair_idx)
+
+    num_subset_pairs = len(subset_pair_idx)
+    return subset_pair_idx, num_subset_pairs
 
 
-def gather_data_at_index(data: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
-    """Retrieves specific elements from data based on indices.
-    data, [B, N, d]: a batch of sequence consisting of N d-dimensional elements.
-    idx, [B, M, 1]: M refers to the number of indices to gather.
+def gather_data_at_index(data: Tensor, idx: Tensor) -> Tensor:
+    """Gather data at the specified indices.
+
+    Args:
+        data, [B, N, d]: batch of sequences of length N.
+        idx, [B, M, 1]: indices to gather from data.
+
+    Returns:
+        ele, [B, M, d]: gathered elements.
     """
     B, N, d = data.shape
-    tile_idx = idx.tile(1, 1, d)
-    ele = torch.gather(input=data, dim=1, index=tile_idx)
+
+    idx_expanded = idx.expand(-1, -1, d)  # [B, M, d]
+    ele = torch.gather(input=data, dim=1, index=idx_expanded)
     return ele
 
 
@@ -119,15 +134,21 @@ def get_random_split_data(
     min_num_ctx: int = 1,
     max_num_ctx: int = 30,
 ):
-    """randomly split a sequence of `total_num` elements into context and target set."""
-    if max_num_ctx >= total_num:
-        raise ValueError("`max_num_ctx` should be smaller than `total_num`.")
-    num_ctx_pairs = random.randint(min_num_ctx, max_num_ctx)
-    num_tar_pairs = total_num - num_ctx_pairs
+    """Randomly split total_num into context and target."""
+    assert 1 <= min_num_ctx < total_num, "min_num_ctx should be in [1, total_num)."
+    assert (
+        min_num_ctx <= max_num_ctx < total_num
+    ), "max_num_ctx should be in [min_num_ctx, total_num)."
+
+    num_ctx = random.randint(min_num_ctx, max_num_ctx)
+    num_tar = total_num - num_ctx
+
     rand_idx = [*range(total_num)]
     random.shuffle(rand_idx)
-    ctx_idx, tar_idx = rand_idx[:num_ctx_pairs], rand_idx[num_ctx_pairs:]
-    return num_ctx_pairs, ctx_idx, num_tar_pairs, tar_idx
+
+    # split the shuffled indices into context and target
+    ctx_idx, tar_idx = rand_idx[:num_ctx], rand_idx[num_ctx:]
+    return num_ctx, ctx_idx, num_tar, tar_idx
 
 
 class My1DInterpolator:
@@ -159,7 +180,7 @@ class My1DInterpolator:
         else:
             raise ValueError(f"{interpolator_type} is not supported.")
 
-    def __call__(self, xx: torch.Tensor) -> torch.Tensor:
+    def __call__(self, xx: Tensor) -> Tensor:
         """Interpolate at points xx.
 
         Args:
@@ -181,9 +202,7 @@ class My1DInterpolator:
         return yy
 
 
-def LND_fill_oob_with_nn(
-    xx: np.ndarray, ext: LND, X: torch.Tensor, y: torch.Tensor
-) -> np.ndarray:
+def LND_fill_oob_with_nn(xx: np.ndarray, ext: LND, X: Tensor, y: Tensor) -> np.ndarray:
     """linear interpolation at points xx;
     out-of-bound value is filled with its nearest neighbors.
 
@@ -224,7 +243,7 @@ class MyNDInterpolator:
         else:
             raise ValueError(f"{interpolator_type} is not supported.")
 
-    def __call__(self, xx: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+    def __call__(self, xx: Union[np.ndarray, Tensor]) -> Tensor:
         """Interpolote at points xx.
 
         Args:
@@ -234,7 +253,7 @@ class MyNDInterpolator:
             yy, (..., 1): predicted values.
         """
         to_tensor = False
-        if isinstance(xx, torch.Tensor):
+        if isinstance(xx, Tensor):
             to_tensor = True
             device = xx.device
             xx = xx.detach().cpu().numpy()

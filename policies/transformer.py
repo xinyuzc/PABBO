@@ -1,4 +1,5 @@
 import torch
+from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import TransformerEncoderLayer
@@ -29,11 +30,11 @@ class MyTransformerEncoderLayer(TransformerEncoderLayer):
 
     def _sa_block(
         self,
-        x: torch.Tensor,
-        attn_mask: Optional[torch.Tensor],
-        key_padding_mask: Optional[torch.Tensor],
+        x: Tensor,
+        attn_mask: Optional[Tensor],
+        key_padding_mask: Optional[Tensor],
         is_causal: bool = False,
-    ) -> torch.Tensor:
+    ) -> Tensor:
 
         slice_ = attn_mask[0, :]
         zero_mask = slice_ == 0
@@ -115,11 +116,11 @@ class TransformerBase(nn.Module):
 
     def embed_input(
         self,
-        query_src: torch.Tensor,
-        c_src: torch.Tensor,
-        eval_pos: torch.Tensor,
+        query_src: Tensor,
+        c_src: Tensor,
+        eval_pos: Tensor,
         num_src: int,
-    ) -> torch.Tensor:
+    ) -> Tensor:
         """Input embedding.
         Args: let `B` be the batch size, `num_src` be the number of context pairs, `num_eval` be the number of target locations,
             query_src, [B, num_src, n_comp * d_x]: a batch of context queries, each consists of `num_src` queries with `n_comp` alternatives.
@@ -152,7 +153,7 @@ class TransformerBase(nn.Module):
             raise ValueError("Remove for simplicity.")
         return emb
 
-    def create_mask(self, query_src, eval_pos, device) -> Tuple[torch.Tensor, int, int]:
+    def create_mask(self, query_src, eval_pos, device) -> Tuple[Tensor, int, int]:
         """create mask for tokens, where context tokens can be attended to by all tokens, while each target token can only be attended by itself.
         Args:
             query_src, [B, num_src, n_comp * d_x]: a batch of context queries, each consists of `num_src` queries with `n_comp` alternatives.
@@ -172,8 +173,8 @@ class TransformerBase(nn.Module):
         return mask, num_src, num_eval
 
     def encode(
-        self, query_src: torch.Tensor, c_src: torch.Tensor, eval_pos: torch.Tensor
-    ) -> Tuple[torch.Tensor]:
+        self, query_src: Tensor, c_src: Tensor, eval_pos: Tensor
+    ) -> Tuple[Tensor]:
         """Encode data with Transformer blocks.
         Args:
             query_src, [B, num_src, n_comp * d_x]: a batch of context queries, each consists of `num_src` queries with `n_comp` alternatives.
@@ -211,7 +212,7 @@ class TransformerModel(TransformerBase):
         nbuckets: int = 2,
         time_budget: bool = True,
     ):
-        """Preferential amortized black-box optimization (PABBO).
+        """Transformer-based model for Preferential amortized black-box optimization (PABBO).
 
         Args:
             d_x, scalar: input dimension.
@@ -264,23 +265,24 @@ class TransformerModel(TransformerBase):
 
     def forward(
         self,
-        query_src: torch.Tensor,
-        c_src: torch.Tensor,
-        eval_pos: torch.Tensor,
+        query_src: Tensor,
+        c_src: Tensor,
+        eval_pos: Tensor,
         acquire: bool = True,
-        acquire_comb_idx: Union[torch.Tensor, None] = None,
+        acquire_comb_idx: Optional[Tensor] = None,
         t: int = 1,
         T: int = 1,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Perform prediction / acquisition.
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Predict acquisition values for query pairs or function distribution at evaluate locations.
+
         Args:
             query_src, [B, num_src, n_comp * d_x]: a batch of context queries, each consists of `num_src` queries with `n_comp` alternatives.
             c_src, [B, num_src, d_c]: preference label associated with context pairs.
             eval_pos, [B, num_eval, d_x]: a batch of target locations, each consists of `num_eval` locations.
             acquire, bool: whether to conduct acquisition task or prediction task on `eval_pos`.
-            acquire_comb_idx, [1, num_query_pairs, 2]: indices from the full combinations of target locations, so as to create query pair set Q.
+            acquire_comb_idx, [num_query_pairs, 2]: optional indices of query points in the candidate query pair set Q. Shared across batch.
             t, scalar: current optimization step.
-            T, scalar: horizon budget.
+            T, scalar: total optimization steps.
 
         Returns:
             eval_af [B, num_query_pairs, 1]: acquistion values for all pairs in the query pair set.
@@ -296,31 +298,41 @@ class TransformerModel(TransformerBase):
         z, num_eval, _ = self.encode(
             query_src=query_src, c_src=c_src, eval_pos=eval_pos
         )  # encode input sequence
-        _, z_eval = (
-            z[:, :-num_eval],
-            z[:, -num_eval:],
-        )  # we only need the Transformer output for target locations
 
-        if acquire:  # acquisition task
-            if acquire_comb_idx is None:  # use the full combinations
+        # transformer output for target points
+        z_eval = z[:, -num_eval:]
+
+        # optimization task
+        if acquire:
+            # use the full combinations: [num_query_pairs, 2]
+            if acquire_comb_idx is None:
                 acquire_comb_idx = torch.combinations(
                     torch.arange(num_eval, device=device)
                 )
-            else:  # take a subset
-                acquire_comb_idx = acquire_comb_idx.view(-1, 2)
 
-            z_eval = z_eval[:, acquire_comb_idx]  # pair all the Transformer outputs
+            num_query_pairs = acquire_comb_idx.shape[0]
+            
+            # pair the transformer's output: [B, num_eval, H] -> [B, num_query_pairs, 2, H] -> [B, num_query_pairs, 2 * H]
+            z_eval_pair = z_eval[:, acquire_comb_idx]
+            z_eval_pair_flat = z_eval_pair.flatten(start_dim=-2)
 
-            state_ix = (t / T) * torch.ones(
-                (B, 1), device=device
-            )  # state of optimization step
-            if (
-                self.af_name == "mlp"
-            ):  # state: [concatenated Trasformer_outputs of the pair, t/T]
-                mlp_in = z_eval.flatten(start_dim=-2)
-                if self.time_budget:  # pass t/T to the acquisition head
-                    state_ix_af = state_ix[:, None, :].tile(1, len(acquire_comb_idx), 1)
-                    mlp_in = torch.cat([mlp_in, state_ix_af], dim=-1)
+            if self.af_name == "mlp":
+                # [B, num_query_pairs, 2 * H]
+                mlp_in = z_eval_pair_flat
+
+                # pass t / T to the acquisition head
+                if self.time_budget:
+                    # state of time step
+                    state_ix = (t / T) * torch.ones((B), device=device)
+
+                    # [B] -> [B, 1, 1] -> [B, num_acq, 1]
+                    state_ix_expanded = (
+                        state_ix.unsqueeze(-1)
+                        .unsqueeze(-1)
+                        .expand(B, num_query_pairs, 1)
+                    )
+                    # [B, num_query_pairs, 2 * H] -> [B, num_query_pairs, 2 * H + 1]
+                    mlp_in = torch.cat([mlp_in, state_ix_expanded], dim=-1)
 
                 if not self.joint_model_af_training:
                     mlp_in = mlp_in.detach()
@@ -329,13 +341,16 @@ class TransformerModel(TransformerBase):
             else:
                 raise ValueError(f"Remove for simplicity.")
 
-        else:  # prediction task
+        else:
+            # prediction task
             eval_bucket_output = self.eval_bucket_decoder(z_eval)
 
-            if self.nbuckets == 1:  # point estimate
+            if self.nbuckets == 1:
+                # point estimate: [B, num_eval, 1]
                 eval_f = eval_bucket_output
                 eval_f_std = torch.zeros_like(eval_f, device=device)
-            elif self.nbuckets == 2:  # Gaussian head
+            elif self.nbuckets == 2:
+                # Gaussian head: [B, num_eval, 2]
                 eval_f_std = F.softplus(eval_bucket_output[:, :, [1]])
                 dist = Normal(loc=eval_bucket_output[:, :, [0]], scale=eval_f_std)
                 eval_f = dist.rsample()

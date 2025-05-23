@@ -1,4 +1,5 @@
 import torch
+from torch import Tensor
 import numpy as np
 from data.environment import gather_data_at_index
 from typing import Tuple, List
@@ -7,8 +8,8 @@ from torchrl.modules import MaskedCategorical
 
 
 def sample_from_masked_categorical(
-    logits: torch.Tensor, mask: torch.Tensor, argmax: bool = False
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    logits: Tensor, mask: Tensor, argmax: bool = False
+) -> Tuple[Tensor, Tensor, Tensor]:
     """sample from the masked Cateogrical distribution.
 
     Args:
@@ -47,33 +48,33 @@ def sample_from_masked_categorical(
 
 def action(
     model: TransformerModel,
-    context_pairs: torch.Tensor,
-    context_preference: torch.Tensor,
+    context_pairs: Tensor,
+    context_preference: Tensor,
     t: int,
     T: int,
-    X_pending: torch.Tensor,
-    pair_idx: torch.Tensor,
-    mask: torch.Tensor,
+    X_pending: Tensor,
+    pair_idx: Tensor,
+    mask: Tensor,
     argmax: bool = False,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """select action.
+) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    """choose the next query pair from the candidate query pair set Q.
 
     Args:
-        model, TransformerModel.
-        context_pairs, (B, num_ctx_pair, 2 d_x): previous queries.
-        context_preference, (B, num_ctx_pair, 1): corresponding true preference labels.
+        model, TransformerModel: transformer model.
+        context_pairs, [B, num_ctx_pair, 2 * d_x]: context pairs, where each pair is a concatenation of two query points.
+        context_preference, [B, num_ctx_pair, 1]: user preference for context pairs.
         t, int: current time step.
-        T, int: time budget.
-        X_pending, (B, num_query_points, d_x): all the query points.
-        pair_idx, (B, num_query_pairs, 2): indices to retrieve the candidate query pair set.
-        mask, (B, num_query_pairs, 1): mask to indicate previous queries.
-        argmax, bool: whether to return the query pair with highest acq_values if True or sample from the entire acq_value distribution. Default False.
+        T, int: total time steps.
+        X_pending, [B, num_query_points, d_x]: query points in the candidate query pair set Q.
+        pair_idx, [B, num_query_pairs, 2]: indices of query points in the candidate query pair set Q.
+        mask, [B, num_query_pairs, 1]: whether to mask out elements at certain indices.
+        argmax, bool: whether to take the argmax or sample from the entire distribution.
 
     Returns:
-        acquisition values, (B, num_query_pairs, 1): acq_values for all pairs in candidate query pair set Q.
-        next_pair_idx, (B,): the indices of the next query pair in Q.
-        log_prob, (B, ): log-prob of the next query pair.
-        entropy, (B,): categorical distribution's entropy value.
+        acquisition values, [B, num_query_pairs, 1]: predicted acquisition values for all candidate query pairs.
+        next_pair_idx, [B]: the index of the selected query pair.
+        log_prob, [B]: the log-prob of selected query pair.
+        entropy, [B]: reflects how certain the policy is.
     """
     # predict acquisition values for all query pairs
     acq_values = model(
@@ -90,86 +91,119 @@ def action(
     next_pair_idx, log_prob, entropy = sample_from_masked_categorical(
         logits=acq_values, mask=mask, argmax=argmax
     )
+
+    # only need gradient from the log_prob
     return (
-        acq_values.detach(),  # NOTE
-        next_pair_idx,
+        acq_values.detach(),
+        next_pair_idx.detach(),
         log_prob,
-        entropy,
+        entropy.detach(),
     )
 
 
 def finish_episode(
-    entropys: List[torch.Tensor],
-    rewards: List[torch.Tensor],
-    log_probs: List[torch.Tensor],
+    entropys: List[Tensor],
+    rewards: List[Tensor],
+    log_probs: List[Tensor],
     discount_factor: float = 0.98,
     eps: float = np.finfo(np.float32).eps.item(),
+    sum_over_tra: bool = True,
 ):
     """Compute the policy learning loss.
 
     Args:
-        entropys, list of Tensor (B, ): policy head's entropy value at each time step
-        rewards, list of Tensor (B, ): reward at each time step
-        log_probs, list of Tensor (B, ): log-prob corresponding to query pair selected at each time step
-        discount_factor, float: control the importance of future rewards.
-        eps: to avoid divide-by-zero issue.
+        entropys, H x [B]: entropy at each time step
+        rewards, H x [B]: reward at each time step
+        log_probs, H x [B]: log-prob of selected action at each time step
+        discount_factor, float: discount factor for rewards at later time steps.
+        eps, float: small value to avoid division by zero.
+        sum_over_tra, bool: whether to sum losses over the trajectory length or take the mean.
+        NOTE when using varying lengths of trajectories during training, it is recommended to take the mean.
 
     Returns:
-        mean loss, (1): loss averaged across batch dim.
-        mean entropy, (1): entropy averaged across batch dim.
+        mean loss, [1]: mean loss across batch dim.
+        mean entropy, [1]: mean entropy across batch dim.
     """
     entropy = torch.stack(entropys, dim=-1)  # (B, H)
     reward = torch.stack(rewards, dim=-1)  # (B, H)
     log_prob = torch.stack(log_probs, dim=-1)  # (B, H)
 
-    H = reward.shape[1]
+    B, H = reward.shape
     discounts = discount_factor ** torch.arange(H)
-    returns = discounts * reward  # gamma^{t-1}r_t
+    
+    # returns[b, t] = discount_factor ** (t - 1) * reward[b, t]
+    returns = discounts * reward
+
+    # standardize the returns: [B, H]
     returns = (returns - returns.mean(dim=-1, keepdim=True)) / (
         returns.std(dim=-1, keepdim=True) + eps
-    )  # standardize along trajectories
+    )
 
     # sum up the negative expected returns
-    loss = (-returns * log_prob).sum(dim=-1)
+    # TODO should take mean when using varying lengths of trajectories
+    loss = -returns * log_prob  # [B, H]
+    loss = loss.sum(dim=-1) if sum_over_tra else loss.mean(dim=-1)  # [B]
 
-    loss, entropy = torch.mean(loss), entropy.mean()
-    return loss, entropy
+    loss_mean, entropy_mean = torch.mean(loss), entropy.mean()
+    return loss_mean, entropy_mean
 
 
 def get_reward(
-    context_pairs_y: torch.Tensor,
-    acq_values: torch.Tensor,
-    pair_y: torch.Tensor,
+    context_pairs_y: Tensor,
+    acq_values: Tensor,
+    pair_y: Tensor,
     regret_option: str = "simple_regret",
-) -> torch.Tensor:
-    """Get reward.
+    maximize: bool = True,  # dummy - default maximize!
+) -> Tensor:
+    """Compute the reward for each trajectory in the batch.
 
     Args:
-        context_pairs_y, (B, num_ctx, 2): function values for current observed query pairs.
-        acq_values, (B, num_query_pair, 1): predicted acquisition values for all candidate query pairs.
-        pair_y, (B, num_query_pair, 2): function values for all candidate query pairs.
-        reward_option, list in ["simple_regret", "inference_regret"].
+        context_pairs_y, [B, num_ctx_pair, 2]: utility values for context pairs.
+        acq_values, [B, num_query_pair, 1]: predicted acquisition values for all candidate query pairs.
+        pair_y, [B, num_query_pair, 2]: utility values for all candidate query pairs.
+        regret_option, str: the type of regret to compute.
+            - "simple_regret": reward is the maximum utility value of context pairs.
+            - "inference_regret": reward is the difference between the maximum utility value of context pairs and the maximum utility value of the selected query pair.
 
     Returns:
-        reward, (B, ): reward for each trajectory in the batch.
+        reward, [B]: reward for each trajectory in the batch.
     """
+    assert regret_option in [
+        "simple_regret",
+        "inference_regret",
+    ], "regret_option should be either 'simple_regret' or 'inference_regret'."
+
+    B = context_pairs_y.shape[0]
     if regret_option == "simple_regret":
-        best_y = torch.max(
-            context_pairs_y.flatten(start_dim=1), dim=-1
-        ).values.squeeze()  # (B, )
-        reward = best_y
+        # [B, num_ctx_pair, 2] -> [B, num_ctx_pair * 2]
+        context_pairs_y_flat = context_pairs_y.flatten(start_dim=1)
+
+        # [B]
+        reward = torch.max(context_pairs_y_flat, dim=-1).values
     elif regret_option == "inference_regret":
-        infer_optima_idx = torch.max(acq_values, dim=1).indices[:, None, :]
-        infer_best_y = torch.max(
-            gather_data_at_index(data=pair_y, idx=infer_optima_idx).flatten(
-                start_dim=1
-            ),  # (B, 1, 2) -> (B, 2)
+        # get the indices of the highest acquisition function value: [B, 1, 1]
+        max_acq_idx = torch.max(acq_values, dim=1, keepdim=True).indices
+
+        # get the pair with highest acq value: [B, 1, 2]
+        max_acq_pair_y = gather_data_at_index(
+            data=pair_y,  # [B, num_query_pair, 2]
+            idx=max_acq_idx,  # [B, 1, 1]
+        )
+        max_acq_pair_y_flat = max_acq_pair_y.flatten(start_dim=1)  # [B, 2]
+
+        # get the inferred optimal utility value: [B]
+        y_best_acq = torch.max(
+            max_acq_pair_y_flat,
             dim=-1,
-        ).values  # (B, )
-        opt_y = torch.max(
-            pair_y.flatten(start_dim=1), dim=-1
-        ).values  # NOTE optimum over the query pair set
-        reward = infer_best_y - opt_y
+        ).values
+
+        # get the true maximum utility value from the sampled query pairs: [B]
+        pair_y_flat = pair_y.flatten(start_dim=1)
+        y_opt = torch.max(pair_y_flat, dim=-1).values
+
+        reward = y_best_acq - y_opt
+
+    assert reward.shape == (B,), f"reward should be of shape [{B}]."
 
     # NOTE no gradient from reward
     reward = reward.detach()

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch import Tensor
 import os
 import os.path as osp
 import time
@@ -10,7 +11,7 @@ import hydra
 from wandb_wrapper import init as wandb_init, save_artifact
 from policies.transformer import TransformerModel
 from data.sampler import OptimizationSampler
-from data.environment import generate_query_pair_set, sample_random_pairs_from_Q
+from data.environment import generate_pair_set, sample_random_pairs_from_Q
 from data.utils import *
 from data.hpob import *
 from policy_learning import *
@@ -21,48 +22,134 @@ from utils.losses import preference_cls_loss, accuracy, kendalltau_correlation
 
 @hydra.main(version_base=None, config_path="configs")
 def main(config: DictConfig):
-    with wandb_init(config=config, **config.wandb) as _:
-        # set default device and data type
-        torch.set_default_dtype(torch.float32)
-        torch.set_default_device(config.experiment.device)
-
-        model = TransformerModel(**config.model)
-        train(config, model)
-
-
-def train(config: DictConfig, model: TransformerModel):
-    device = torch.device(config.experiment.device)
-    n_gpus = torch.cuda.device_count()  # the number of gpus
-
-    # result saving path, `/results/PABBO/expid`
-    root = osp.join(
-        hydra.utils.get_original_cwd(),
-        RESULT_PATH,
-        config.experiment.model,
-        config.experiment.expid,
+    # experiment directory
+    exp_path = osp.join(
+        os.getcwd(), RESULT_PATH, config.experiment.model, config.experiment.expid
     )
 
+    # wandb files will be saved under experiment directory
+    if config.experiment.wandb:
+        wandb_init(config=config, **config.wandb, dir=exp_path)
+
+    torch.set_default_dtype(torch.float32)
+    torch.set_default_device(config.experiment.device)
+
+    model = TransformerModel(**config.model)
+    train(
+        expid=config.experiment.expid,
+        exp_path=exp_path,
+        model=model,
+        dataname=config.data.name,
+        x_range=config.data.x_range,
+        sampler_kwargs=config.train.sampler,
+        min_num_ctx=config.data.min_num_ctx,
+        max_num_ctx=config.data.max_num_ctx,
+        standardize=config.data.standardize,
+        search_space_id=config.data.search_space_id,
+        p_noise=config.train.p_noise,
+        n_steps=config.train.n_steps,
+        n_burnin=config.train.n_burnin,
+        batch_size=config.train.train_batch_size,
+        batch_size_2=config.train.ac_train_batch_size,
+        lr=config.train.lr,
+        lr_2=config.train.ac_lr,
+        n_random_pairs=config.train.n_random_pairs,
+        num_prediction_points=config.train.num_prediction_points,
+        num_query_points=config.train.num_query_points,
+        num_init_pairs=config.train.num_init_pairs,
+        n_trajectories=config.train.n_trajectories,
+        max_T=config.train.max_T,
+        discount_factor=config.train.discount_factor,
+        regret_option=config.train.regret_option,
+        loss_weight=config.train.loss_weight,
+        auxiliary_ratio=config.train.auxiliary_ratio,
+        print_freq=config.train.print_freq,
+        eval_freq=config.train.eval_freq,
+        save_freq=config.train.save_freq,
+        ranking_reward=config.train.ranking_reward,
+        sobol_grid=config.train.sobol_grid,
+        seed=config.train.train_seed,
+        resume=config.experiment.resume,
+        device=config.experiment.device,
+        wb=config.experiment.wandb,
+    )
+
+
+def replicate_batch(
+    batch: Tensor,  # [B, N, D]
+    num_replicas: int,
+) -> Tensor:  # [B * num_replicas, N, D]
+    """replicate the batch for `num_replicas` times"""
+    B, N, D = batch.shape
+    batch = batch.unsqueeze(1)  # [B, 1, N, D]
+    batch = batch.expand(-1, num_replicas, -1, -1)  # [B, num_replicas, N, D]
+    batch = batch.reshape(-1, N, D)  # [B * num_replicas, N, D]
+    return batch
+
+
+def train(
+    expid: str,
+    exp_path: str,
+    model: TransformerModel,
+    dataname: str,
+    x_range: list,  # [d_x, 2]
+    sampler_kwargs: dict,
+    min_num_ctx: int,
+    max_num_ctx: int,
+    standardize: bool = False,
+    search_space_id: str = "",
+    p_noise: float = 0.0,
+    n_steps: int = 10000,
+    n_burnin: int = 3000,
+    batch_size: int = 128,
+    batch_size_2: int = 16,
+    lr: float = 1e-3,
+    lr_2: float = 3e-5,
+    n_random_pairs: int = 100,
+    num_prediction_points: int = 100,
+    num_query_points: int = 100,
+    num_init_pairs: int = 0,
+    n_trajectories: int = 20,
+    max_T: int = 64,
+    discount_factor: float = 0.98,
+    regret_option: str = "simple_regret",
+    loss_weight: float = 1.0,
+    auxiliary_ratio: float = 1.0,
+    print_freq: int = 200,
+    eval_freq: int = 1000,
+    save_freq: int = 500,
+    ranking_reward: bool = False,
+    sobol_grid: bool = False,
+    seed: int = 0,
+    resume: bool = False,
+    device: str = "cuda",
+    wb: bool = True,  # whether to use wandb
+):
+    n_gpus = torch.cuda.device_count()  # the number of gpus
+
     # checkpoint
-    if osp.exists(root + "/ckpt.tar"):
-        if not config.experiment.resume:
-            raise FileExistsError(root)
+    if osp.exists(exp_path + "/ckpt.tar"):
+        if not resume:
+            raise FileExistsError(exp_path)
     else:
-        os.makedirs(root, exist_ok=True)
+        os.makedirs(exp_path, exist_ok=True)
 
     logfilename = os.path.join(
-        root, f'train_{config.data.name}_{time.strftime("%Y%m%d_%H%M%S")}.log'
+        exp_path, f'train_{dataname}_{time.strftime("%Y%m%d_%H%M%S")}.log'
     )
     logger = get_logger(file_name=logfilename, mode="w")
 
-    set_all_seeds(config.train.train_seed)
-    if config.data.name.startswith("GP"):
-        # sampler for GP-based synthetic functions
+    set_all_seeds(seed)
+
+    # define data sampler
+    if dataname.startswith("GP"):
+        # GP synthesis data
         sampler = OptimizationSampler(
-            device=config.experiment.device,
-            **config.train.sampler,
+            device=device,
+            **sampler_kwargs,
         )
-    elif config.data.name.startswith("HPOB"):
-        # sampler for HPOB data
+    elif dataname.startswith("HPOB"):
+        # Hyperparameter optimization data
         sampler = HPOBHandler(
             root_dir=osp.join(
                 hydra.utils.get_original_cwd(), DATASETS_PATH, "hpob-data"
@@ -70,145 +157,148 @@ def train(config: DictConfig, model: TransformerModel):
             mode="v3-train-augmented",
         )
     else:
-        raise NotImplementedError(
-            f"Sampler for data {config.data.name} is not implemented."
-        )
+        raise NotImplementedError(f"Dataset {dataname} not implemented.")
 
-    # optimizer and scheduler
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.train.lr)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=config.train.n_steps
-    )
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_steps)
 
-    # load saved model if resume
-    if config.experiment.resume:
-        ckpt = torch.load(os.path.join(root, "ckpt.tar"), map_location=device)
+    # load checkpoint
+    if resume:
+        ckpt = torch.load(os.path.join(exp_path, "ckpt.tar"), map_location=device)
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         scheduler.load_state_dict(ckpt["scheduler"])
         expdir = ckpt["expdir"]
         start_step = ckpt["step"]
+        if start_step == n_burnin + 1:
+            # using smaller learning rate when introducing acquisition task
+            for g in optimizer.param_groups:
+                g["lr"] = lr_2
+
     else:
         expdir = os.getcwd()
         start_step = 1
 
-    # log experiment setup
-    if not config.experiment.resume:
-        logger.info(f"Experiment: {config.experiment.expid}")
+    if not resume:
+        logger.info(f"Experiment: {expid}")
         logger.info(
             f"Total number of parameters: {sum(p.numel() for p in model.parameters())}\n"
         )
-        logger.info(f"Train on {config.data.name}.")
+        logger.info(f"Train on {dataname}.")
 
-    # DataParallel
+    # simple DataParallel
     if n_gpus > 1:
         print(f"Model is copied and distributed to {n_gpus} GPUs")
         model = nn.DataParallel(model)
         model.to(device)
 
-    # averager for recording metrics
+    # record average metrics
     ravg = Averager()
 
-    B = config.train.train_batch_size
-    d_x = len(config.data.x_range)
+    d_x = len(x_range)
 
-    if config.train.n_random_pairs < config.train.max_T:
-        raise ValueError(
-            f"The size of candidate query pair set given by `n_random_pairs` should be no less than the number of queries given by `max_T`."
-        )
-    logger.info(
-        f"Number of prediction points: {config.train.num_prediction_points}, number of query points: {config.train.num_prediction_points}, number of pairs in prediction set and query pair set: {config.train.n_random_pairs}"
-    )
+    assert (
+        n_random_pairs >= max_T
+    ), f"n_random_pairs {n_random_pairs} should be no less than max_T {max_T}"
 
-    # training loops
-    for epoch in range(start_step, config.train.n_steps + 1):
+    logger.info(f"Number of prediction points: {num_prediction_points}")
+    logger.info(f"Number of query points: {num_query_points}")
+    logger.info(f"Number of random pairs: {n_random_pairs}")
+
+    for epoch in range(start_step, n_steps + 1):
         model.train()
         optimizer.zero_grad(set_to_none=True)
 
         # create datasets
-        if epoch <= config.train.n_burnin:
-            # warmup: only train the prediction head on prediction dataset
+        if epoch <= n_burnin:
+            B = batch_size
+            # during burnin phase, only sample the prediction dataset
             X_pred, y_pred, _, _ = sampler.sample(
                 batch_size=B,
-                max_num_ctx_points=config.data.max_num_ctx,
-                num_total_points=config.train.num_prediction_points,
-                x_range=config.data.x_range,  # [d_x, 2]
-                sobol_grid=config.train.sobol_grid,
+                max_num_ctx_points=max_num_ctx,
+                num_total_points=num_prediction_points,
+                x_range=x_range,  # [d_x, 2]
+                sobol_grid=sobol_grid,
                 evaluate=False,
-                search_space_id=str(config.data.search_space_id),
-                standardize=config.data.standardize,
+                search_space_id=str(search_space_id),
+                standardize=standardize,
                 train_split="pred",
                 split="train",
-                device=config.experiment.device,
+                device=device,
             )
         else:
-            if config.data.name.startswith("GP"):
-                # sample both prediction and query dataset
+            B = batch_size_2
+            # sample the prediction and query dataset
+            if dataname.startswith("GP"):
                 X, y, Xopt, yopt = sampler.sample(
                     batch_size=B,
-                    max_num_ctx_points=config.data.max_num_ctx,
-                    num_total_points=config.train.num_prediction_points
-                    + config.train.num_query_points,
-                    x_range=config.data.x_range,  # [d_x, 2]
-                    sobol_grid=config.train.sobol_grid,
+                    max_num_ctx_points=max_num_ctx,
+                    num_total_points=num_prediction_points + num_query_points,
+                    x_range=x_range,  # [d_x, 2]
+                    sobol_grid=sobol_grid,
                     evaluate=False,
                 )
 
-                X_pred = X[:, : -config.train.num_query_points]
-                y_pred = y[:, : -config.train.num_query_points]
-                X_ac = X[:, -config.train.num_query_points :]
-                y_ac = y[:, -config.train.num_query_points :]
+                X_pred = X[:, :-num_query_points]
+                y_pred = y[:, :-num_query_points]
+                X_ac = X[:, -num_query_points:]
+                y_ac = y[:, -num_query_points:]
             else:
-                # for HPOB, sample prediction and query dataset from non-overlapping splits
+                # HPOB data: sample prediction and query datasets from different split to prevent information leak
                 X_pred, y_pred, _, _ = sampler.sample(
                     batch_size=B,
-                    num_total_points=config.train.num_prediction_points,
-                    search_space_id=str(config.data.search_space_id),
-                    standardize=config.data.standardize,
+                    num_total_points=num_prediction_points,
+                    search_space_id=str(search_space_id),
+                    standardize=standardize,
                     train_split="pred",
                     split="train",
-                    device=config.experiment.device,
+                    device=device,
                 )
                 X_ac, y_ac, Xopt, yopt = sampler.sample(
-                    num_total_points=config.train.num_query_points,
+                    num_total_points=num_query_points,
                     batch_size=B,
-                    search_space_id=str(config.data.search_space_id),
-                    standardize=config.data.standardize,
+                    search_space_id=str(search_space_id),
+                    standardize=standardize,
                     train_split="acq",
                     split="train",
-                    device=config.experiment.device,
+                    device=device,
                 )
 
-            # reuse a query dataset for `num_trajectories` times
-            X_ac = X_ac.tile(
-                config.train.n_trajectories, 1, 1
-            )  # (B_t := B * n_tra, num_query, d_x)
-            y_ac = y_ac.tile(config.train.n_trajectories, 1, 1)
-            Xopt = Xopt.tile(config.train.n_trajectories, 1, 1)
-            yopt = yopt.tile(config.train.n_trajectories, 1, 1)
+            # reuse the query dataset for `num_trajectories` times for stability: [Bt, N, d_x]...
+            X_ac = replicate_batch(X_ac, n_trajectories)
+            y_ac = replicate_batch(y_ac, n_trajectories)
+            Xopt = replicate_batch(Xopt, n_trajectories)
+            yopt = replicate_batch(yopt, n_trajectories)
 
-            # generate the candidate query pair set
-            query_pair_idx, query_pair, query_pair_y, query_c = generate_query_pair_set(
+            query_pair_idx, query_pair, query_pair_y, query_c = generate_pair_set(
                 X=X_ac,
                 y=y_ac,
-                num_total_points=config.train.num_query_points,
-                n_random_pairs=config.train.n_random_pairs,
-                p_noise=config.train.p_noise,
-                ranking_reward=config.train.ranking_reward,
+                num_total_points=num_query_points,
+                n_random_pairs=n_random_pairs,
+                p_noise=p_noise,
+                ranking_reward=ranking_reward,
             )
 
-            # mask to register queried pairs
-            mask = torch.ones(
-                (query_pair.shape[0], query_pair.shape[1], 1)
-            ).bool()  # (B_t, num_query_pairs, 1)
+            Bt, num_query_pairs, _ = query_pair.shape
 
-            # sample starting pairs from Q
+            # expand query_pair_idx
+            assert query_pair_idx.shape == (
+                num_query_pairs,
+                2,
+            ), f"query_pair_idx of shape {query_pair_idx.shape} should be of shape ({num_query_pairs}, 2)."
+
+            # [num_query_pairs, 2] -> [num_query_pairs, n_gpus, 2] -> [num_query_pairs * n_gpus, 2]
+            query_pair_idx_tiled = query_pair_idx.tile(n_gpus, 1)
+            # mask to register queried pairs: [Bt, num_query_pairs, 1]
+            mask = torch.ones((Bt, num_query_pairs, 1)).bool()
+
+            # sample random starting pairs from Q
             (context_pairs, context_pairs_y, context_c, init_pair_idx) = (
                 sample_random_pairs_from_Q(
                     pair=query_pair,
                     pair_y=query_pair_y,
                     c=query_c,
-                    num_samples=config.train.num_init_pairs,
+                    num_samples=num_init_pairs,
                 )
             )
             mask[:, init_pair_idx] = 0.0  # NOTE mask out sampled ones
@@ -219,30 +309,30 @@ def train(config: DictConfig, model: TransformerModel):
             log_probs = []
             rewards = []
 
-        # generate prediction set
-        _, src_pairs, src_pairs_y, src_c = generate_query_pair_set(
+        # generate prediction set: [B, n_random_pairs, 2 * d_x], ...
+        _, src_pairs, src_pairs_y, src_c = generate_pair_set(
             X=X_pred,
             y=y_pred,
-            num_total_points=config.train.num_prediction_points,
-            n_random_pairs=config.train.num_prediction_points,
-            p_noise=config.train.p_noise,
+            num_total_points=num_prediction_points,
+            n_random_pairs=n_random_pairs,
+            p_noise=p_noise,
         )
 
+        # free up memory
         X_pred = X_pred.cpu().numpy()
         y_pred = y_pred.cpu().numpy()
         del X_pred
         del y_pred
-        torch.cuda.empty_cache()
 
         cls_losses = 0.0
 
         # optimization loop with T time budget
-        for t in range(1, config.train.max_T + 2):
+        for t in range(1, max_T + 2):
             # prediction task: randomly split the prediction set into context and target
             _, ctx_idx, _, tar_idx = get_random_split_data(
-                total_num=config.train.num_prediction_points,
-                min_num_ctx=config.data.min_num_ctx,
-                max_num_ctx=config.data.max_num_ctx,
+                total_num=num_prediction_points,
+                min_num_ctx=min_num_ctx,
+                max_num_ctx=max_num_ctx,
             )
 
             # predicted function values
@@ -261,7 +351,7 @@ def train(config: DictConfig, model: TransformerModel):
             )
             cls_losses += cls_loss
 
-            # compute and record accuracy and kt-cor
+            # record accuracy and kendall tau correlation
             acc = accuracy(f=pred_tar_f.detach(), c=src_c[:, tar_idx], reduce=True)
             kt_cor = kendalltau_correlation(
                 pred_tar_f.detach(),
@@ -272,47 +362,44 @@ def train(config: DictConfig, model: TransformerModel):
             ravg.update("kt_cor", kt_cor)
 
             # optimization task
-            if epoch > config.train.n_burnin:
-                # take action (propose the next query) given current observations
+            if epoch > n_burnin:
+                # take action / suggest next query pair
                 acq_values, next_pair_idx, log_prob, entropy = action(
                     model=model,
                     context_pairs=context_pairs,
                     context_preference=context_c,
                     t=t,
-                    T=config.train.max_T,
-                    X_pending=X_ac,  # all the query points
-                    pair_idx=query_pair_idx.tile(
-                        (n_gpus, 1)
-                    ),  # NOTE DataParallel will split every tensor along the first dim
+                    T=max_T,
+                    X_pending=X_ac,
+                    pair_idx=query_pair_idx_tiled,  # NOTE DataParallel will split every tensor along the first dim
                     mask=mask,
                 )
-                # compute and record reward for previous run
+
+                # compute and record reward for previous step
                 if t > 1:
                     reward = get_reward(
                         context_pairs_y=context_pairs_y,
                         acq_values=acq_values,
                         pair_y=query_pair_y,
-                        regret_option=config.train.regret_option,
+                        regret_option=regret_option,
                     )
                     rewards.append(reward)
-                    if t > config.train.max_T:
+                    if t > max_T:
                         break
 
-                # update observations and candidate set given the proposed query
-                next_pair_idx = next_pair_idx[:, None, None]  # (B, 1, 1)
+                # update observations and candidate query pair set
+                next_pair_idx = next_pair_idx[:, None, None]  # [Bt, 1, 1]
 
-                # mask out the query pair from candidate query pair set
+                # mask out the selected query pair
                 mask.scatter_(
                     dim=1,
                     index=next_pair_idx,
                     src=torch.zeros_like(mask, device=mask.device),
                 )
 
-                # the query with corresponding preference label
                 next_pair = gather_data_at_index(data=query_pair, idx=next_pair_idx)
-                next_pair_y = gather_data_at_index(
-                    data=query_pair_y, idx=next_pair_idx
-                )  # NOTE only for computing the reward; won't be accessed by model
+                # only for reward computation
+                next_pair_y = gather_data_at_index(data=query_pair_y, idx=next_pair_idx)
                 next_c = gather_data_at_index(data=query_c, idx=next_pair_idx)
 
                 # update observations
@@ -325,31 +412,32 @@ def train(config: DictConfig, model: TransformerModel):
                 entropys.append(entropy)
 
         # averaged BCE loss
-        cls_loss = cls_losses / config.train.max_T
+        cls_loss = cls_losses / max_T
 
         # compute the policy learning loss given trajectories information
-        if epoch > config.train.n_burnin:
-            # the best observed value, max f_T
-            best_y = torch.max(
+        if epoch > n_burnin:
+            # best utility value of the context pairs; only for computing reward
+            y_best_acq = torch.max(
                 context_pairs_y.flatten(start_dim=1), dim=-1
             ).values.squeeze()
-            opt_y = torch.max(query_pair_y.flatten(start_dim=1), dim=-1).values
 
-            # record the final simple regret
-            final_simple_regret = (opt_y - best_y).mean().item()
+            # best utility value of the entire query pair set
+            y_opt = torch.max(query_pair_y.flatten(start_dim=1), dim=-1).values
+
+            # simple regret: difference between the best possible and the best observed utility value
+            final_simple_regret = (y_opt - y_best_acq).mean().item()
 
             # compute the policy learning loss
             policy_loss, entropy = finish_episode(
                 entropys=entropys,
                 rewards=rewards,
                 log_probs=log_probs,
-                discount_factor=config.train.discount_factor,
+                discount_factor=discount_factor,
+                sum_over_tra=True,  # sum loss over trajectories or mean
             )
 
-            # auxiliary_ratio controls the ratio of training steps with auxiliary loss. Default 1.0.
-            lw = config.train.loss_weight * (
-                config.train.auxiliary_ratio > torch.rand((1), device=device)
-            )
+            # auxiliary ratio: randomly include prediction task loss for ablation. Default 1.0
+            lw = loss_weight * (auxiliary_ratio > torch.rand((1), device=device))
             loss = policy_loss + lw * cls_loss
         else:
             policy_loss, final_simple_regret, entropy = (
@@ -364,6 +452,8 @@ def train(config: DictConfig, model: TransformerModel):
         optimizer.step()
         scheduler.step()
 
+        torch.cuda.empty_cache()
+
         # record metrics
         ravg.update("loss", loss)
         ravg.update("cls_loss", cls_loss)
@@ -371,15 +461,15 @@ def train(config: DictConfig, model: TransformerModel):
         ravg.update("final_simple_regret", final_simple_regret)
         ravg.update("entropy", entropy)
 
-        if epoch % config.train.print_freq == 0:
-            line = f"{config.experiment.expid} step {epoch} "
+        if epoch % print_freq == 0:
+            line = f"{expid} step {epoch} "
             line += f'lr {optimizer.param_groups[0]["lr"]:.3e} '
             line += f"[train_loss] "
             line += ravg.info()
             logger.info(line)
             ravg.reset()
 
-        if config.experiment.wandb:
+        if wb:
             wandb.log(
                 {
                     "entropy": entropy,
@@ -393,7 +483,7 @@ def train(config: DictConfig, model: TransformerModel):
             )
 
         # saving checkpoints
-        if epoch % config.train.save_freq == 0 or epoch == config.train.n_steps:
+        if epoch % save_freq == 0 or epoch == n_steps:
             # save the model so you can load it to any device
             model_state_dict = (
                 model.state_dict() if n_gpus <= 1 else model.module.state_dict()
@@ -406,26 +496,22 @@ def train(config: DictConfig, model: TransformerModel):
                 "step": epoch + 1,
             }
 
-            # # save to the experiment directory
-            # torch.save(ckpt, "ckpt.tar")
-
             # save to the result saving path
-            torch.save(ckpt, os.path.join(root, f"ckpt.tar"))
+            torch.save(ckpt, os.path.join(exp_path, f"ckpt.tar"))
 
             # save to wandb if used
-            if config.experiment.wandb:
+            if wb:
                 save_artifact(
                     run=wandb.run,
-                    local_path=os.path.join(root, f"ckpt.tar"),
+                    local_path=os.path.join(exp_path, f"ckpt.tar"),
                     name="checkpoint",
                     type="model",
                 )
 
-        # downsize the batch and lower learning rate when introducing acquisition task
-        if epoch == config.train.n_burnin:
-            B = config.train.ac_train_batch_size
+        # using smaller learning rate when introducing acquisition task
+        if epoch == n_burnin:
             for g in optimizer.param_groups:
-                g["lr"] = config.train.ac_lr
+                g["lr"] = lr_2
 
         epoch += 1
 
