@@ -204,8 +204,8 @@ eval.plot_seed_id=-1 \
 data.name=branin2D  \
 data.d_x=2  \
 data.x_range="[[-5, 10], [0, 15]]"  \
-data.Xopt="[[-3.142,12.275],[3.142,2.275],[9.42478,2.475]]" 
-data.yopt="[[0.397887],[0.397887],[0.397887]]" 
+data.Xopt="[[-3.142,12.275],[3.142,2.275],[9.42478,2.475]]" \
+data.yopt="[[0.397887],[0.397887],[0.397887]]"
 ```
 To test PABBO on **beale2D function**: 
 ```bash 
@@ -223,7 +223,7 @@ data.name=beale2D  \
 data.d_x=2  \
 data.x_range="[[-4.5, 4.5], [-4.5, 4.5]]"  \
 data.Xopt="[[3, 0.5]]"  \
-data.yopt="[[0.]]" 
+data.yopt="[[0.]]"
 ```
 To test PABBO on **ackley6D function**: 
 ```bash
@@ -253,7 +253,7 @@ data.name=hartmann6D  \
 data.d_x=6  \
 data.x_range="[[0, 1], [0, 1], [0, 1], [0, 1], [0, 1], [0, 1]]"  \
 data.Xopt="[[0.20169, 0.150011, 0.476874, 0.275332, 0.311652, 0.6573]]"  \
-data.yopt="[[-3.32237]]" 
+data.yopt="[[-3.32237]]"
 ```
 To test PABBO on **levy6D function**: 
 ```bash

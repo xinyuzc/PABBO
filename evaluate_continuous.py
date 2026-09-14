@@ -196,7 +196,7 @@ def main(config: DictConfig):
         if not osp.exists(save_dir):
             os.makedirs(save_dir, exist_ok=True)
 
-        print(f"Saving results in f{str(save_dir)}...")
+        print(f"Saving results in {str(save_dir)}...")
         torch.save(
             res["simple_regret"],
             f"{save_dir}/SIMPLE_REGRET_S{config.eval.eval_num_query_points}_B{config.eval.num_parallel}.pt",

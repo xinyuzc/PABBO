@@ -1,5 +1,5 @@
 **.env**
-**results**
+/results/evaluation
 **wandb**
 ***.out**
 **datasets**

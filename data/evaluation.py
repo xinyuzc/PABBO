@@ -8,10 +8,12 @@ from data.function import *
 from data.candy_data_handler import *
 from data.sushi_data_handler import *
 from data.hpob import *
+import os
 import os.path as osp
 
 
 def get_evaluation_datapath(root, dataname):
+    os.makedirs(root, exist_ok=True)
     return osp.join(root, f"{dataname}_evaluation_task.pt")
 
 
